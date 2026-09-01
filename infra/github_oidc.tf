@@ -11,6 +11,24 @@ locals {
   state_bucket_arn = "arn:aws:s3:::${local.name}-tfstate-${data.aws_caller_identity.current.account_id}"
 
   anysplit_role_arns = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name}-*"
+
+  # GitHub issues an *immutable* subject claim: the owner and repository names
+  # each carry their numeric id, as
+  #
+  #   repo:owner@<owner-id>/name@<repo-id>:ref:refs/heads/main
+  #
+  # rather than the `repo:owner/name:...` form most guides still show. The ids
+  # are what make it immutable, and they are the reason to prefer this form:
+  # names can be released and re-registered, so a policy matching names alone
+  # would keep trusting this repository's path after someone else claimed it.
+  #
+  #   gh api repos/<owner>/<name> --jq '{owner_id: .owner.id, repo_id: .id}'
+  gh_owner = split("/", var.github_repo)[0]
+  gh_name  = split("/", var.github_repo)[1]
+  gh_subject = join("", [
+    "repo:", local.gh_owner, "@", var.github_owner_id,
+    "/", local.gh_name, "@", var.github_repo_id,
+  ])
 }
 
 # One provider per account, not per repo. `client_id_list` is the `aud` claim
@@ -46,15 +64,15 @@ data "aws_iam_policy_document" "github_assume" {
 
     # The `sub` claim is the only thing standing between this role and any
     # other GitHub repository in the world, so it is pinned to two exact
-    # subjects rather than `repo:owner/name:*`. A wildcard would also match
-    # every branch, tag, and environment — meaning anyone able to push a branch
-    # could assume a role that can apply infrastructure.
+    # subjects rather than a wildcard. A wildcard would match every branch,
+    # tag and environment too, meaning anyone able to push a branch could
+    # assume a role that can apply infrastructure.
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
-        "repo:${var.github_repo}:ref:refs/heads/main",
-        "repo:${var.github_repo}:pull_request",
+        "${local.gh_subject}:ref:refs/heads/main",
+        "${local.gh_subject}:pull_request",
       ]
     }
   }

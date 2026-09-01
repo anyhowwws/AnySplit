@@ -53,6 +53,24 @@ variable "github_repo" {
   default     = "anyhowwws/AnySplit"
 }
 
+variable "github_owner_id" {
+  description = <<-EOT
+    Numeric GitHub id of the owner in `github_repo`. Pairs with
+    `github_repo_id` to build the immutable OIDC subject — see github_oidc.tf
+    for why the names alone are not enough.
+
+      gh api repos/<owner>/<name> --jq '{owner_id: .owner.id, repo_id: .id}'
+  EOT
+  type        = string
+  default     = "101925287"
+}
+
+variable "github_repo_id" {
+  description = "Numeric GitHub id of the repository. See `github_owner_id`."
+  type        = string
+  default     = "1353577566"
+}
+
 variable "alarm_email" {
   description = "Address that receives DLQ alarms. Leave empty to skip the subscription."
   type        = string
