@@ -1,0 +1,31 @@
+node_modules/
+dist/
+.build/
+
+# Secrets. Only .env.example is committed.
+.env
+.env.*
+!.env.example
+
+# Claude Code machine-local overrides. The shared permission set lives in
+# .claude/settings.json, which IS committed so it follows you between machines.
+.claude/settings.local.json
+
+# Terraform
+.terraform/
+# Holds a personal Telegram id for the /test gate.
+*.tfvars
+# Holds the state bucket name, which embeds the AWS account id.
+# Only backend.hcl.example is committed.
+backend.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# Real receipts used for Phase 1 accuracy testing. These are other people's
+# meals — they do not belong in git.
+receipts/
+
+.DS_Store
+*.log

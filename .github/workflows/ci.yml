@@ -1,0 +1,124 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# OIDC: no long-lived AWS keys in GitHub. Create a role that trusts this repo's
+# OIDC provider and set its ARN as the AWS_ROLE_ARN repository variable.
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+env:
+  AWS_REGION: ap-southeast-1
+  TF_IN_AUTOMATION: 'true'
+
+jobs:
+  build:
+    name: build and typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: backend
+        working-directory: backend
+        run: |
+          npm install
+          npm run typecheck
+          npm run build
+
+      - name: miniapp
+        working-directory: miniapp
+        run: |
+          npm install
+          npm run typecheck
+
+      - name: terraform fmt
+        run: terraform -chdir=infra fmt -check -recursive
+
+      # The Lambda zips are inputs to `terraform plan`, so they have to survive
+      # into the terraform job or the plan shows a spurious code change.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lambda-bundles
+          path: backend/dist/
+          retention-days: 1
+
+  terraform:
+    name: plan / apply
+    runs-on: ubuntu-latest
+    needs: build
+    # This repo is public, so pull requests can come from forks. A fork PR gets a
+    # read-only GITHUB_TOKEN regardless of the `permissions:` block above, so it
+    # cannot mint an OIDC token and cannot reach AWS — by design. Skipping the
+    # job outright means a community PR shows the build passing rather than an
+    # unexplained credentials failure. The build job above still runs on forks.
+    if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: lambda-bundles
+          path: backend/dist/
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.10.5'
+
+      # The state bucket name embeds the AWS account id, so it is a repository
+      # secret rather than a committed value. See infra/backend.tf.
+      - run: terraform -chdir=infra init -input=false -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+
+      - name: plan
+        id: plan
+        run: terraform -chdir=infra plan -input=false -no-color -out=tfplan
+        continue-on-error: true
+
+      - name: comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          PLAN: ${{ steps.plan.outputs.stdout }}
+        with:
+          script: |
+            const plan = (process.env.PLAN || '').slice(0, 60000);
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `### terraform plan\n\n\`\`\`\n${plan}\n\`\`\``,
+            });
+
+      - name: fail if plan failed
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+      - name: apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform -chdir=infra apply -input=false -auto-approve tfplan
+
+      # index.html must be invalidated or returning users keep the old bundle
+      # reference; the hashed assets themselves are immutable.
+      - name: deploy mini app
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          cd miniapp
+          npm install
+          VITE_API_BASE="$(terraform -chdir=../infra output -raw api_base_url)" npm run build
+          aws s3 sync dist/ "s3://$(terraform -chdir=../infra output -raw miniapp_bucket)/" --delete
+          aws cloudfront create-invalidation \
+            --distribution-id "$(terraform -chdir=../infra output -raw cloudfront_distribution_id)" \
+            --paths '/index.html'

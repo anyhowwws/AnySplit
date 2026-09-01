@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>AnySplit — Privacy Policy</title>
+    <!--
+      Deliberately a plain static page: no JavaScript, no external requests, no
+      dependency on the Mini App bundle. A privacy policy should stay readable
+      outside Telegram and keep working even if the app itself is broken.
+    -->
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #14171a;
+        --muted: #5b6570;
+        --rule: #e4e8ec;
+        --accent: #2f6fd0;
+        --card: #f6f8fa;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #17191c;
+          --fg: #e9edf1;
+          --muted: #9aa4b0;
+          --rule: #2a2e34;
+          --accent: #6fa8ff;
+          --card: #1e2126;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 2rem 1.25rem 4rem;
+        background: var(--bg);
+        color: var(--fg);
+        font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto,
+          Helvetica, Arial, sans-serif;
+        -webkit-text-size-adjust: 100%;
+      }
+      main { max-width: 44rem; margin: 0 auto; }
+      h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 .25rem; }
+      h2 {
+        font-size: 1.05rem;
+        margin: 2.25rem 0 .5rem;
+        padding-top: 1.25rem;
+        border-top: 1px solid var(--rule);
+      }
+      p, li { margin: .6rem 0; }
+      ul { padding-left: 1.15rem; }
+      .sub { color: var(--muted); margin: 0 0 1.5rem; font-size: .95rem; }
+      a { color: var(--accent); }
+      code {
+        background: var(--card);
+        padding: .1rem .35rem;
+        border-radius: .25rem;
+        font-size: .9em;
+      }
+      table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .95rem; }
+      th, td { text-align: left; padding: .55rem .6rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+      th { font-weight: 600; }
+      .note {
+        background: var(--card);
+        border-radius: .6rem;
+        padding: .9rem 1rem;
+        margin: 1.25rem 0;
+        font-size: .95rem;
+      }
+      footer { margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--rule); color: var(--muted); font-size: .9rem; }
+      /* Long tables shouldn't force the page to scroll sideways on a phone. */
+      .scroll { overflow-x: auto; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>AnySplit — Privacy Policy</h1>
+      <p class="sub">Last updated 4 August 2026</p>
+
+      <p>
+        AnySplit is a Telegram bot that splits a restaurant bill from a photo of the receipt.
+        This policy describes exactly what it receives, what it keeps, and for how long.
+        It replaces Telegram's
+        <a href="https://telegram.org/privacy-tpa">Standard Bot Privacy Policy</a> for this bot.
+      </p>
+
+      <div class="note">
+        <strong>The short version.</strong> Your receipt photo is never stored. The bill is
+        deleted 24 hours after you last touch it. Phone numbers are never stored at all.
+        There are no accounts, and nothing is sold, shared or used for advertising.
+      </div>
+
+      <h2>1. Who runs this</h2>
+      <p>
+        AnySplit is operated by an individual developer, not a company, and is not affiliated
+        with or endorsed by Telegram. Contact details are in section 8.
+      </p>
+
+      <h2>2. What AnySplit receives</h2>
+      <ul>
+        <li><strong>The receipt photo</strong> you send to the bot.</li>
+        <li><strong>Your Telegram user ID</strong>, supplied by Telegram so the bot can reply to you and can tell your bill apart from someone else's.</li>
+        <li><strong>Names you type</strong> for the people you're splitting with. These are free text — they can be nicknames, initials, or anything you like.</li>
+        <li><strong>Optionally, a name and phone number</strong> for whoever should be paid back, if you choose to enter one.</li>
+      </ul>
+      <p>
+        AnySplit does not ask for, and cannot see, your phone number, contact list, other chats,
+        or any Telegram data beyond the message you send it.
+      </p>
+
+      <h2>3. What is stored, and for how long</h2>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>Data</th><th>Stored?</th><th>Kept for</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Receipt photo</td>
+              <td><strong>Never stored</strong></td>
+              <td>Held in memory only while being read, then discarded</td>
+            </tr>
+            <tr>
+              <td>Payee phone number</td>
+              <td><strong>Never stored</strong></td>
+              <td>Used only to write your messages, then discarded</td>
+            </tr>
+            <tr>
+              <td>Bill contents — merchant, items, prices, the names you entered, each person's share</td>
+              <td>Yes, temporarily</td>
+              <td>Deleted automatically <strong>24 hours</strong> after you last work on it. Sending doesn't end it, so a split can still be corrected or re-sent</td>
+            </tr>
+            <tr>
+              <td>Operational logs — timings, error messages, counts</td>
+              <td>Yes</td>
+              <td><strong>14 days</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Logs do not contain your receipt, your item names, any phone number, or the text of your
+        messages. Your Telegram user ID appears only as an irreversible keyed hash, so the logs
+        can be used to count how many people used the bot without identifying who they were.
+      </p>
+
+      <h2>4. Reading the receipt</h2>
+      <p>
+        To turn a photo into a list of items, AnySplit sends the image to
+        <a href="https://www.anthropic.com/">Anthropic</a>'s Claude API. This is the only place
+        your photo goes, and it is sent for this single purpose. Anthropic's handling of it is
+        governed by their own
+        <a href="https://www.anthropic.com/legal/privacy">privacy policy</a>.
+      </p>
+      <p>
+        The bot's infrastructure runs on Amazon Web Services in the Asia Pacific (Singapore)
+        region. Messages are delivered by Telegram and are subject to
+        <a href="https://telegram.org/privacy">Telegram's privacy policy</a>.
+      </p>
+
+      <h2>5. Phone numbers you enter for someone else</h2>
+      <p>
+        If you enter a phone number so people know who to pay back, that number is used only to
+        write it into the messages you forward, and is never saved. Please only enter someone
+        else's number if they are happy for you to share it with the people you're splitting
+        with.
+      </p>
+
+      <h2>6. What AnySplit never does</h2>
+      <ul>
+        <li>No accounts, no sign-up, no password.</li>
+        <li>No advertising, no tracking, no analytics tied to you.</li>
+        <li>Your data is never sold, rented, or shared with anyone beyond the services in section 4.</li>
+        <li>No payment is taken or processed — AnySplit only tells people what they owe.</li>
+        <li>No record is kept of past bills, who you eat with, or what you order.</li>
+      </ul>
+
+      <h2>7. Your rights</h2>
+      <p>You can ask for a copy of any personal data held about you, or ask for it to be deleted. Requests are answered within 30 days.</p>
+      <p>
+        In practice there is rarely anything to send or delete: a bill is gone within 24 hours
+        of your last action on it. The only remaining trace is the operational logs described in
+        section 3, which delete themselves within 14 days and contain no identifying information
+        beyond a hashed ID.
+      </p>
+      <p>
+        You can stop using AnySplit at any time by deleting the chat and blocking the bot. Nothing
+        is retained afterwards.
+      </p>
+
+      <h2>8. Contact</h2>
+      <p>
+        For privacy questions, data requests, or anything else about this bot, contact:
+        <br />
+        <code>anygroupapplications@gmail.com</code>
+      </p>
+
+      <h2>9. Changes</h2>
+      <p>
+        If this policy changes, the revised version will appear on this page with a new date at
+        the top. Material changes will also be announced by the bot.
+      </p>
+
+      <footer>
+        AnySplit is an independent third-party bot. It is not maintained, endorsed, or affiliated
+        with Telegram.
+      </footer>
+    </main>
+  </body>
+</html>

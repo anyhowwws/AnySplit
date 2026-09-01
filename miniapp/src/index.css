@@ -1,0 +1,42 @@
+@import 'tailwindcss';
+
+/*
+ * Theme straight from Telegram's CSS variables so the app doesn't look foreign
+ * inside the client. Fallbacks are the light-theme defaults, used when the page
+ * is opened in a plain browser during development.
+ */
+@theme {
+  --color-tg-bg: var(--tg-theme-bg-color, #ffffff);
+  --color-tg-text: var(--tg-theme-text-color, #000000);
+  --color-tg-hint: var(--tg-theme-hint-color, #707579);
+  --color-tg-link: var(--tg-theme-link-color, #3390ec);
+  --color-tg-button: var(--tg-theme-button-color, #3390ec);
+  --color-tg-button-text: var(--tg-theme-button-text-color, #ffffff);
+  --color-tg-secondary: var(--tg-theme-secondary-bg-color, #f4f4f5);
+  --color-tg-section: var(--tg-theme-section-bg-color, #ffffff);
+  --color-tg-separator: var(--tg-theme-section-separator-color, #e5e5e6);
+  --color-tg-destructive: var(--tg-theme-destructive-text-color, #df3f40);
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--color-tg-bg);
+  color: var(--color-tg-text);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Roboto, Helvetica, Arial, sans-serif;
+  /* Telegram's own overscroll already bounces the sheet; ours would double it. */
+  overscroll-behavior-y: none;
+}
+
+/* Number inputs with spinners are unusable at thumb size. */
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}

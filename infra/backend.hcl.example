@@ -1,0 +1,10 @@
+# Copy to backend.hcl (gitignored) and fill in your state bucket, then:
+#
+#   AWS_PROFILE=terraform terraform init -backend-config=backend.hcl
+#
+# The bucket name is kept out of git because it embeds the AWS account id.
+# Regenerate the real value with:
+#
+#   echo "anysplit-tfstate-$(aws sts get-caller-identity --query Account --output text)"
+
+bucket = "anysplit-tfstate-<your-aws-account-id>"

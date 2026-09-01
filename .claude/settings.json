@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Read",
+      "Edit",
+      "Write",
+      "WebSearch",
+      "WebFetch",
+      "Skill(claude-api)",
+      "Skill(claude-api:*)"
+    ],
+    "deny": [
+      "Bash(rm -rf /*)",
+      "Bash(terraform destroy *)",
+      "Bash(aws s3 rb *)",
+      "Bash(aws s3 rm *)",
+      "Bash(aws dynamodb delete-table *)",
+      "Bash(aws ssm delete-parameter *)",
+      "Bash(aws lambda delete-function *)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Read(//Users/hows/.ssh/**)"
+    ]
+  }
+}
