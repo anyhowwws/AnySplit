@@ -27,6 +27,13 @@ jobs:
         with:
           node-version: '22'
 
+      # Needed for the `fmt -check` step below. The runner image has no
+      # Terraform preinstalled, so without this the step exits 127.
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.10.5'
+          terraform_wrapper: false
+
       - name: backend
         working-directory: backend
         run: |
