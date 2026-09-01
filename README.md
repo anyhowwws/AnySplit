@@ -268,3 +268,10 @@ would outlive any rotation.
 
 $1–3/month, mostly inside the free tier, plus vision API calls (a few dollars at
 personal volume).
+
+## Licence
+
+**All rights reserved.** This repository is public so the design and the code
+can be read — see [DESIGN.md](DESIGN.md) — not so they can be reused. No licence
+to use, run, copy, modify or distribute is granted; see [LICENSE](LICENSE).
+Ask by opening an issue if you want to.
