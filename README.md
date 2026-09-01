@@ -24,7 +24,7 @@ group messages out.
 | 1 — Prove the parse | ✅ **7–8/9** on real receipts (see [SPEC.md §8](SPEC.md)) |
 | 2 — Terraform foundation | ✅ applied |
 | 3–5 — Backend, Mini App, share flow | ✅ deployed and exercised |
-| 6 — Harden | ✅ alarms, usage metrics, hashed log ids. CI still needs an `AWS_ROLE_ARN` repo variable before the workflow can run |
+| 6 — Harden | ✅ alarms, usage metrics, hashed log ids, push-to-deploy CI |
 
 Also since the original spec: receipt cropping before the vision call, a second
 validation gate on the summary arithmetic, an optional payee, group vs
@@ -74,43 +74,105 @@ Everything else follows from these.
 And one rule about people: a model proposes, the admin confirms. Every field the
 vision call produces is editable before anything is sent.
 
-## Build and deploy
+## Deploying
+
+**`main` deploys itself.** A push there runs
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml), which typechecks both
+packages, builds the Lambda bundles, applies Terraform, rebuilds the Mini App
+against the live API URL, syncs it to S3, and invalidates `index.html`. A pull
+request gets its `terraform plan` posted as a comment and applies nothing.
+
+Building the Mini App inside the same job that holds the Terraform outputs is
+deliberate. `VITE_API_BASE` is baked into the bundle at build time, and a
+locally-built bundle once shipped with it empty — an expired AWS session had
+made `terraform output` fail quietly, so every API call went same-origin and
+came back as CloudFront's SPA fallback. `vite.config.ts` now refuses to build
+without it, and CI takes the value straight from the state it just applied.
+
+There are no AWS keys in GitHub. CI assumes an IAM role through GitHub's OIDC
+provider, defined in [`infra/github_oidc.tf`](infra/github_oidc.tf) and scoped
+to two exact subjects — `main` and `pull_request`. Two repository **secrets**
+point at it:
+
+| Secret | Value |
+|---|---|
+| `AWS_ROLE_ARN` | `terraform -chdir=infra output -raw github_actions_role_arn` |
+| `TF_STATE_BUCKET` | the bucket in `infra/backend.hcl` |
+
+Secrets rather than variables, though neither value is really confidential:
+this repo is public, and Actions echoes a step's inputs into the log. A
+variable prints verbatim, and both values embed the AWS account id.
+
+### One-time setup
+
+CI cannot bootstrap itself — the role it assumes is created by the very
+Terraform it runs — so a new deployment starts from a terminal.
 
 ```bash
-# 1. Prove the parse first — this is the highest-risk part of the whole system.
+# 1. Prove the parse first. It is the highest-risk part of the whole system,
+#    and everything downstream assumes it works.
 cd backend && npm install
 cp ../.env.example ../.env   # add your ANTHROPIC_API_KEY
 node --env-file=../.env --experimental-strip-types ../scripts/parse.ts ../receipts/*.jpg
 # Exit criteria: the subtotal reconciles on 9 of 10 real receipts.
 
-# 2. Infrastructure. See infra/README.md for state bootstrap and SSM secrets.
-#    AWS_PROFILE=terraform is required — the provider can't read this machine's
-#    `login_session` credentials. infra/README.md explains the profile.
+# 2. State bucket and SSM secrets — see infra/README.md for both.
+
+# 3. First apply, which creates the CI role among everything else.
+#    AWS_PROFILE=terraform is required: the provider can't read this machine's
+#    `login_session` credentials. infra/README.md explains why.
 npm run build
 cd ../infra
 cp backend.hcl.example backend.hcl   # then set your state bucket name
 AWS_PROFILE=terraform terraform init -backend-config=backend.hcl
 AWS_PROFILE=terraform terraform apply
 
-# 3. Mini App, which needs the API URL from the Terraform outputs.
-cd ../miniapp && npm install
-VITE_API_BASE="$(terraform -chdir=../infra output -raw api_base_url)" npm run build
-aws s3 sync dist/ "s3://$(terraform -chdir=../infra output -raw miniapp_bucket)/" --delete
+# 4. Hand the role and bucket to GitHub, after which pushes deploy themselves.
+gh secret set AWS_ROLE_ARN --body "$(AWS_PROFILE=terraform terraform output -raw github_actions_role_arn)"
+gh secret set TF_STATE_BUCKET --body "$(grep -o '"[^"]*"' backend.hcl | tr -d '"')"
 
-# 4. Point Telegram at the webhook.
+# 5. Point Telegram at the webhook.
 curl -X POST "https://api.telegram.org/bot$BOT_TOKEN/setWebhook" \
-  -d "url=$(terraform -chdir=infra output -raw webhook_url)" \
+  -d "url=$(AWS_PROFILE=terraform terraform output -raw webhook_url)" \
   -d "secret_token=$WEBHOOK_SECRET"
 
-# 5. BotFather -> /newapp -> attach the miniapp_url output.
+# 6. BotFather -> /newapp -> attach the miniapp_url output.
 ```
 
 Verify with `getWebhookInfo`; check `pending_update_count` and
 `last_error_message`.
 
+If you fork this, the CI role's trust policy names *your* repository by its
+numeric ids, so set `github_repo`, `github_owner_id` and `github_repo_id` in
+`terraform.tfvars` before that first apply — see
+[infra/github_oidc.tf](infra/github_oidc.tf) for why ids rather than names.
+
+### Deploying by hand
+
+Still supported, and still the only option for the two things CI deliberately
+cannot do: anything needing `dynamodb:DeleteTable` (the CI role does not have
+it — dropping the bills table should take a human at a terminal), and recovery
+when the pipeline itself is broken.
+
+```bash
+cd backend && npm run build
+AWS_PROFILE=terraform terraform -chdir=../infra apply
+
+cd ../miniapp
+VITE_API_BASE="$(AWS_PROFILE=terraform terraform -chdir=../infra output -raw api_base_url)" npm run build
+aws s3 sync dist/ "s3://$(AWS_PROFILE=terraform terraform -chdir=../infra output -raw miniapp_bucket)/" --delete
+aws cloudfront create-invalidation \
+  --distribution-id "$(AWS_PROFILE=terraform terraform -chdir=../infra output -raw cloudfront_distribution_id)" \
+  --paths '/index.html'
+```
+
 ## Working from another machine
 
-Everything needed to build and deploy is in the repo **except five things**, all
+To *deploy* from another machine you need nothing at all beyond push access —
+that is the point of the pipeline above. The list below is for working locally:
+running the parse harness, or applying Terraform by hand.
+
+Everything needed for that is in the repo **except five things**, all
 deliberately untracked because they hold secrets or identifiers that should not
 be in a public repo. After cloning, recreate them:
 

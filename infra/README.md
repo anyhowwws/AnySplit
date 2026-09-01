@@ -72,9 +72,16 @@ session is short-lived (~15 min): static env vars freeze at export time and can
 expire midway through a CloudFront apply, whereas Terraform can re-invoke a
 credential process to refresh.
 
-CI is unaffected — GitHub Actions authenticates via OIDC role assumption.
+CI is unaffected — GitHub Actions authenticates via OIDC role assumption, which
+is one reason to prefer pushing over applying from a laptop: the pipeline cannot
+have a session expire halfway through.
 
 ## Apply order
+
+**Normally you don't.** Pushing to `main` applies this directory through GitHub
+Actions — see [Deploying](../README.md#deploying). What follows is the manual
+path, for bootstrapping a new account, for recovery when the pipeline is
+broken, and for the changes CI is deliberately not allowed to make.
 
 The Lambda zips are built artefacts, so the backend must be built first.
 
@@ -96,12 +103,53 @@ aws cloudfront create-invalidation \
   --paths '/index.html'
 ```
 
+## The CI role
+
+`github_oidc.tf` defines the role GitHub Actions assumes. No AWS keys are
+stored in GitHub: Actions mints a short-lived OIDC token per job, AWS verifies
+it against the account's provider, and STS returns credentials good for one run.
+
+Two things about it are worth knowing before you change it.
+
+**The subject is matched on numeric ids, not names.** GitHub issues an
+immutable subject claim — `repo:owner@<owner-id>/name@<repo-id>:ref:...`, not
+the `repo:owner/name:...` form most guides show. Matching names alone would be
+weaker as well as wrong: names can be released and re-registered, so the policy
+would go on trusting this repository's path after somebody else claimed it. If
+a role suddenly cannot be assumed, CloudTrail records the subject that was
+actually presented:
+
+```bash
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity \
+  --max-results 5 --query 'Events[].CloudTrailEvent' --output text
+```
+
+**The permissions are scoped to the `anysplit-*` prefix**, mirroring the
+per-Lambda roles. IAM write is the dangerous part — a role that can create roles
+can escalate — so it cannot touch anything outside that prefix, and `PassRole`
+is further conditioned on `lambda.amazonaws.com`. There is no
+`dynamodb:DeleteTable`: every bill in flight lives in that table, and a change
+that forces its replacement should fail in CI and be done by a human.
+
+Tightening a policy this way means the occasional missing action. Check before
+pushing rather than after, since a denied action only surfaces partway through
+a refresh:
+
+```bash
+aws iam simulate-principal-policy \
+  --policy-source-arn "$(terraform output -raw github_actions_role_arn)" \
+  --resource-arns '*' --action-names cloudwatch:ListTagsForResource sns:ListTagsForResource \
+  --query 'EvaluationResults[?EvalDecision!=`allowed`].[EvalActionName]' --output text
+```
+
 ## Resource inventory
 
 | File | Contains |
 |---|---|
 | `main.tf` | provider, locals, SSM `data` sources |
 | `backend.tf` | S3 remote state, bucket supplied via `backend.hcl` |
+| `github_oidc.tf` | OIDC provider and the role CI assumes |
 | `dynamodb.tf` | bills table, TTL enabled |
 | `sqs.tf` | parse queue, DLQ, event source mapping |
 | `iam.tf` | one least-privilege role per Lambda |
