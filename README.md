@@ -11,7 +11,10 @@ links to follow.
 Built for Singapore, where a receipt might stack 10% service charge and then 9%
 GST, or have neither — so both are read off the receipt rather than configured.
 
-See [SPEC.md](SPEC.md) for the design and phased build plan.
+**[DESIGN.md](DESIGN.md)** is the place to start if you want to understand how
+this is built and why — architecture, CI/CD, application flow, and the
+reasoning behind each decision. [SPEC.md](SPEC.md) is the original design and
+phased build plan.
 
 ## Status
 

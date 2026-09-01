@@ -1,0 +1,456 @@
+# AnySplit — Design
+
+A Telegram bot that splits a restaurant bill from a photo of the receipt.
+
+One person photographs the receipt. A vision model reads it into structured
+line items. They assign each item to a name in a Telegram Mini App, and
+AnySplit returns a per-person total with service charge and GST folded in
+proportionally — either as one message per person to forward, or a single
+consolidated message to paste into a group chat.
+
+Built for Singapore, where a bill might stack 10% service charge and then 9%
+GST, or have neither. Both are read off the receipt rather than configured.
+
+This document is the design rationale. [README.md](README.md) covers running
+and deploying it.
+
+---
+
+## 1. Technical architecture
+
+```mermaid
+flowchart TB
+    subgraph client["Client"]
+        TG["Telegram app<br/>bot chat + Mini App webview"]
+    end
+
+    subgraph aws["AWS — ap-southeast-1"]
+        CF["CloudFront<br/>SPA error mapping"]
+        S3["S3 — private<br/>OAC-only access"]
+        APIGW["API Gateway<br/>HTTP API, ANY /{proxy+}"]
+        API["Lambda: api<br/>arm64, 512MB, 15s"]
+        SQS["SQS parse-queue<br/>+ DLQ, maxReceive 3"]
+        PARSER["Lambda: parser<br/>arm64, 1024MB, 60s"]
+        DDB[("DynamoDB<br/>single table, TTL")]
+        SSM["SSM Parameter Store<br/>SecureString"]
+        CW["CloudWatch<br/>logs, metrics, alarms"]
+    end
+
+    ANTHROPIC["Anthropic API<br/>Claude Sonnet 5 vision"]
+    TGAPI["Telegram Bot API"]
+
+    TG -->|"webhook"| APIGW
+    TG -->|"loads Mini App"| CF
+    CF --> S3
+    TG -->|"REST + initData"| APIGW
+    APIGW --> API
+    API -->|"enqueue"| SQS
+    SQS --> PARSER
+    PARSER -->|"photo stream"| ANTHROPIC
+    API <--> DDB
+    PARSER --> DDB
+    API -.->|"read at runtime"| SSM
+    PARSER -.-> SSM
+    API --> TGAPI
+    PARSER --> TGAPI
+    API & PARSER --> CW
+```
+
+### What is infrastructure, what is application code
+
+Everything below is declared in Terraform. Nothing is created by hand except
+the two bootstrap items noted at the bottom.
+
+| AWS resource | Terraform file | Role |
+|---|---|---|
+| Lambda `anysplit-api` | `lambda.tf` | Telegram webhook + REST API for the Mini App |
+| Lambda `anysplit-parser` | `lambda.tf` | SQS consumer; calls the vision model |
+| API Gateway HTTP API | `apigw.tf` | `ANY /{proxy+}`, `$default` stage, CORS |
+| DynamoDB `anysplit-bills` | `dynamodb.tf` | Single table, TTL enabled |
+| SQS `parse-queue` + DLQ | `sqs.tf` | Decouples the slow vision call from the webhook |
+| S3 + CloudFront | `s3.tf`, `cloudfront.tf` | Static Mini App, private bucket, OAC only |
+| SSM Parameter Store | `main.tf` (data) | Bot token, Anthropic key, webhook secret |
+| IAM roles | `iam.tf` | One least-privilege role per Lambda |
+| OIDC provider + CI role | `github_oidc.tf` | Keyless deploys from GitHub Actions |
+| Log groups, metric filters, alarms, SNS | `monitoring.tf`, `lambda.tf` | Observability |
+
+| Application code | Language | Role |
+|---|---|---|
+| `shared/` | TypeScript | Types, money, calc, payee — imported by **both** backend and Mini App |
+| `backend/src/handlers/` | TypeScript | Two Lambda entrypoints: `api`, `parser` |
+| `backend/src/lib/` | TypeScript | Bot, vision, preprocessing, DB, formatting, logging, auth |
+| `miniapp/src/` | React + Vite + Tailwind | Four-screen Mini App, static build |
+| `scripts/parse.ts` | TypeScript | Offline harness for measuring parse accuracy |
+
+Created out-of-band, because they cannot bootstrap themselves: the **S3 state
+bucket** (Terraform cannot create its own backend) and the **three SSM
+SecureStrings** (deliberately never in Terraform state — see §4).
+
+### Why this shape
+
+**Two Lambdas, not one.** Telegram redelivers a webhook if it is not
+acknowledged in about five seconds. A vision call takes far longer than that.
+The `api` Lambda therefore does only fast work — validate, persist, enqueue,
+reply — and the `parser` Lambda does the slow work behind SQS. Merging them
+would produce duplicate updates and duplicate charges on the Anthropic API.
+
+**`shared/` is imported by the front end on purpose.** The Mini App's Summary
+screen previews per-person totals using the *same* `computeShares` the server
+runs on finalise, so what the payer approves is exactly what gets sent. Two
+copies of that arithmetic would eventually disagree by a cent, and the bug
+would surface as an accusation between friends.
+
+**arm64 across both functions.** Cheaper per millisecond, and nothing in the
+dependency tree is native.
+
+**No custom domain.** CloudFront's `*.cloudfront.net` and API Gateway's
+`*.execute-api.*` both carry valid certificates, which is all Telegram
+requires — so ACM, Route 53, and a `us-east-1` provider alias are all absent
+by design rather than by omission.
+
+---
+
+## 2. CI/CD design
+
+### Repository structure
+
+```
+AnySplit/
+├── shared/               types, money, calc — imported by BOTH sides
+├── backend/              two Lambda bundles, built with esbuild
+│   ├── src/handlers/     api.ts, parser.ts — the two entrypoints
+│   └── src/lib/          bot, vision, preprocess, db, format, log, auth
+├── miniapp/              React + Vite + Tailwind, static
+├── infra/                Terraform, one file per concern
+├── scripts/parse.ts      accuracy harness
+└── .github/workflows/    ci.yml
+```
+
+A monorepo, because `shared/` has to be a single source of truth. Splitting
+the backend and Mini App into separate repositories would mean versioning
+`shared/` as a package and would reintroduce exactly the drift it exists to
+prevent.
+
+### Pipeline
+
+Pushing to `main` deploys. A pull request plans and applies nothing.
+
+```mermaid
+flowchart LR
+    subgraph build["job: build and typecheck"]
+        direction TB
+        B1["npm ci + typecheck<br/>backend"] --> B2["esbuild bundles"]
+        B2 --> B3["typecheck miniapp"]
+        B3 --> B4["terraform fmt -check"]
+        B4 --> B5["upload lambda bundles<br/>as artifact"]
+    end
+
+    subgraph tf["job: plan / apply"]
+        direction TB
+        T1["download bundles"] --> T2["assume role via OIDC"]
+        T2 --> T3["terraform init<br/>-backend-config"]
+        T3 --> T4["terraform plan"]
+        T4 --> T5{"event?"}
+        T5 -->|"pull_request"| T6["comment plan on PR"]
+        T5 -->|"push to main"| T7["terraform apply"]
+        T7 --> T8["build Mini App with<br/>VITE_API_BASE from outputs"]
+        T8 --> T9["s3 sync + CloudFront<br/>invalidate /index.html"]
+    end
+
+    build --> tf
+```
+
+| Stage | Why it exists |
+|---|---|
+| Typecheck before bundling | esbuild strips types without checking them; without this step a type error ships |
+| Lambda bundles as a job artifact | The zips are inputs to `terraform plan`. Rebuilding them in the second job would produce different hashes and a spurious code diff |
+| `terraform fmt -check` | Formatting arguments belong in CI, not in review |
+| Plan-as-PR-comment | Infrastructure review happens on the diff of *effects*, not only the diff of HCL |
+| Mini App built **inside** the job holding the outputs | See below — this one is scar tissue |
+| CloudFront invalidation of `/index.html` only | Hashed assets are immutable and cached forever; only the entrypoint must be invalidated |
+
+**Why the Mini App is built inside the deploy job.** `VITE_API_BASE` is baked
+into the bundle at build time. A locally-built bundle once shipped with it
+empty: an AWS session had expired mid-build, `terraform output` failed quietly,
+and the empty string meant every API call went same-origin and came back as
+CloudFront's SPA fallback — `index.html` where JSON was expected. The Mini App
+reported "the server sent an unexpected response" and nothing worked.
+`vite.config.ts` now refuses to build without the variable, and CI takes the
+value directly from the state it has just applied.
+
+### Deployment security
+
+No long-lived AWS credentials exist in GitHub. Each job mints a short-lived
+OIDC token, AWS verifies it against the account's provider, and STS returns
+credentials good for that run only.
+
+Two properties are deliberate:
+
+**The trust policy pins two exact subjects** — `main` and `pull_request` —
+rather than `repo:owner/name:*`. A wildcard also matches every branch, tag and
+environment, so anyone able to push a branch could apply infrastructure.
+
+**The subject is matched on numeric IDs.** GitHub issues an immutable subject
+claim:
+
+```
+repo:owner@<owner-id>/name@<repo-id>:ref:refs/heads/main
+```
+
+not the `repo:owner/name:...` form most documentation shows. The IDs are the
+point: GitHub names can be released and re-registered, so a policy matching
+names alone would keep trusting the repository path after somebody else
+claimed it. This surfaced as a bare `Not authorized to perform
+sts:AssumeRoleWithWebIdentity`; CloudTrail's record of the subject actually
+presented is what identified it.
+
+**The role's permissions are scoped to the `anysplit-*` prefix.** IAM write is
+the dangerous part — a role that can create roles can escalate — so it cannot
+touch anything outside that prefix, and `PassRole` is further conditioned on
+`lambda.amazonaws.com`. There is no `dynamodb:DeleteTable`: every bill in
+flight lives in that table, and a change forcing its replacement should fail in
+CI and be carried out by a human.
+
+Because this repository is public, `AWS_ROLE_ARN` and `TF_STATE_BUCKET` are
+**secrets rather than variables**. Neither is truly confidential, but Actions
+echoes step inputs into logs, public repository logs are readable by anyone,
+and both values embed the AWS account ID. Secrets are masked; variables print
+verbatim.
+
+**Fork pull requests skip the Terraform job entirely.** A fork PR receives a
+read-only token and cannot mint an OIDC credential, so the job would fail
+confusingly rather than dangerously. Skipping it means a contributor sees a
+clean build instead.
+
+---
+
+## 3. Application flow
+
+```mermaid
+sequenceDiagram
+    participant U as Payer
+    participant TG as Telegram
+    participant API as Lambda api
+    participant Q as SQS
+    participant P as Lambda parser
+    participant C as Claude vision
+    participant DB as DynamoDB
+    participant MA as Mini App
+
+    U->>TG: sends receipt photo
+    TG->>API: webhook update
+    API->>DB: create bill (status: parsing)
+    API->>Q: enqueue billId
+    API-->>TG: "Reading your receipt…" (< 2.5s)
+
+    Q->>P: deliver message
+    P->>TG: download photo (stream)
+    P->>P: crop to receipt (hysteresis threshold)
+    P->>C: vision call, forced tool use
+    C-->>P: structured line items
+    P->>P: validate — two independent gates
+    P->>DB: store units (status: ready)
+    P->>TG: edit message → summary + "Review & split"
+
+    U->>MA: taps button, Mini App opens
+    MA->>API: GET /api/bills/:id (signed initData)
+    API-->>MA: bill
+    Note over MA: Review → People → Assign → Summary
+    MA->>API: PATCH corrections
+    MA->>API: POST /finalise { people, payee, mode }
+    API->>API: computeShares (same code as preview)
+    API->>DB: save shares, refresh TTL
+    API->>TG: per-person messages, or one group message
+    U->>U: forwards them
+```
+
+### Bill lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> parsing: photo received
+    parsing --> ready: parsed and validated
+    parsing --> error: unreadable
+    ready --> final: shares sent
+    final --> final: re-edited and re-sent
+    final --> [*]: TTL, 24h after last action
+    error --> [*]: TTL
+    ready --> [*]: TTL (abandoned)
+```
+
+### The four screens
+
+| Screen | Purpose |
+|---|---|
+| **Review** | Merchant, line items and total, all editable. The model proposes; the payer confirms |
+| **People** | Who is splitting |
+| **Assign** | Tap a person, tap their items. Multiple people on one item splits it |
+| **Summary** | Per-person totals, who is collecting, and the two send options |
+
+### API surface
+
+| Route | Purpose |
+|---|---|
+| `POST /webhook` | Telegram updates. Requires the secret-token header |
+| `GET /api/bills/:id` | Load a bill. Admin only |
+| `PATCH /api/bills/:id` | Corrections from the Review screen |
+| `POST /api/bills/:id/finalise` | Compute shares and send. Repeatable |
+| `OPTIONS /*` | CORS preflight |
+| `GET /health` | Liveness |
+
+`OPTIONS /*` is explicit because API Gateway's `ANY /{proxy+}` route swallows
+preflights and hands them to the application, which otherwise answers 404 and
+the browser reports it as an opaque CORS failure.
+
+---
+
+## 4. Design considerations
+
+### The four invariants
+
+Everything else follows from these.
+
+1. **All money is integer cents.** No floats in the database, the API, or the
+   model's output. Formatting to dollars happens only at render time. A float
+   bug did get through early — `Number("1.005") * 100` yields `100.4999…` — and
+   it was caught by a real receipt, which is why parsing is now decimal.
+
+2. **The grossing factor is derived, never configured.**
+   `factor = total / subtotal`, applied to each person's item sum. That one
+   line covers service-charge-then-GST stacking, GST-only venues, hawker
+   receipts with neither, and flat discounts, with no branching and no
+   per-venue settings.
+
+3. **Quantities are expanded into units.** `2x Beer $12.00` is stored as two
+   rows of `$6.00`, so giving one beer to each of two people needs no fraction
+   UI and no special case.
+
+4. **Cents are reconciled.** After rounding each person to whole cents, the
+   one- or two-cent remainder goes to the largest share, so the shares sum to
+   exactly what was paid. A split that does not add up is worse than useless.
+
+And one rule about people: **a model proposes, the admin confirms.** Every
+field the vision call produces is editable before anything is sent.
+
+### Getting the parse right
+
+The vision call is the highest-risk part of the system, so it was measured
+before anything was built around it — `scripts/parse.ts` runs real receipts and
+reports how many reconcile.
+
+| Model | Raw phone photos | Cropped |
+|---|---|---|
+| Haiku 4.5 | 3/9 | 5/9 |
+| Sonnet 5 | 6/9 | 8/9 |
+
+Two things came out of that. **Cropping matters more than model choice** — the
+receipt is isolated from the background before the call, which improves
+accuracy *and* reduces cost, since image tokens scale with area. The crop uses
+a hysteresis threshold (seed on confident bright pixels, grow into connected
+dimmer ones) after a single fixed threshold was found to be truncating
+receipts whose totals block fell into shadow.
+
+**Structured output is forced**, via a tool schema with `strict: true`, rather
+than parsed out of prose.
+
+Two independent validation gates then run:
+
+- `reconcilesToSubtotal()` — do the line items sum to the printed subtotal?
+- `summaryDelta()` — does `subtotal − discount + service + GST` equal the
+  total, within five cents?
+
+The second exists because the first cannot catch an invented total. When a
+crop truncated the totals block, the model produced a plausible, wrong total
+that reconciled perfectly against the items it could see.
+
+### Privacy as architecture, not policy
+
+The claim is that AnySplit does not keep your receipts. That is enforced
+structurally, so it cannot quietly stop being true.
+
+| Promise | How it is enforced |
+|---|---|
+| Photos are never stored | Streamed from Telegram directly into the vision call. Never written to disk or S3 |
+| Phone numbers are never persisted | `StoredPayee` and `Payee` are separate types; only the former reaches the database. A type error, not a code review, catches a regression |
+| Bills disappear | DynamoDB TTL, 24h after the last action. Because AWS's TTL sweep can lag up to 48h, `ttl` is re-checked on read and expired bills are treated as absent |
+| Logs hold no receipt content | No message text, item names or image bytes are logged. For commands only the verb is recorded, so `/start <billId>` logs as `/start` |
+| User IDs are not logged raw | HMAC-SHA256, keyed with the bot token, truncated — enough to correlate a session, useless as an identifier |
+
+No accounts, no roster, no payment history. There is nothing to mine.
+
+### A design decision that was reversed
+
+Bills were originally deleted the moment their messages were sent — the
+strongest possible retention story. It was wrong. It made two ordinary
+situations impossible: switching from per-person to group delivery after
+sending, and correcting a split that turned out to be wrong.
+
+Deletion was replaced with a rolling 24-hour TTL that every action refreshes.
+`finalise` became repeatable, `PATCH` began working on finalised bills, and the
+Mini App learned to rehydrate a sent bill back onto the Summary screen. The
+retention claim was then corrected everywhere it appeared — README, `/help`,
+`/start`, `/privacy`, and the hosted policy page.
+
+The privacy win had been measured against an imagined user who never makes
+mistakes.
+
+### Security posture
+
+- **Webhook authentication.** `setWebhook` registers a `secret_token`, returned
+  by Telegram as a header. Requests without it are rejected — otherwise anyone
+  discovering the API Gateway URL could inject updates.
+- **initData verification.** Every Mini App request carries Telegram's signed
+  `initData`; the backend recomputes the HMAC and rejects payloads older than
+  three hours. A `user_id` from a request body is never trusted.
+- **Admin-only mutation.** Only the payer who sent the photo can read or modify
+  a bill. Recipients receive their share through the bot, never the API.
+- **Unguessable bill IDs.** 72 bits of entropy.
+- **Secrets never enter Terraform state.** Terraform passes SSM parameter
+  *paths*; Lambda resolves values at runtime. Reading a SecureString through a
+  `data` source and passing the value into a Lambda environment block would
+  write the plaintext into `terraform.tfstate` — the same leak as hardcoding
+  it, one step removed.
+- **Least privilege per function.** The `api` role cannot consume the queue;
+  the `parser` role cannot send to it. Neither can delete a bill.
+
+### Observability
+
+Logs are single-line JSON. Ambient context — `updateId`, `billId`,
+`sqsMessageId` — attaches automatically via `AsyncLocalStorage`, so one filter
+reconstructs a whole bill across both Lambdas without threading a context
+object through every function signature.
+
+Bot tokens are scrubbed from every line: HTTP clients quote the URL they failed
+on, Telegram URLs embed the token, and a token in CloudWatch would outlive any
+rotation.
+
+A few log lines are load-bearing. `duplicate update dropped` **without** a
+matching `update handled` is what a dead bot looks like — Telegram retrying
+while the first attempt keeps failing. `vision call complete` carries
+`inputTokens`, which scales with image area, so a jump means cropping stopped
+working rather than that receipts got longer.
+
+Alarms cover DLQ depth and API error rate.
+
+### Cost
+
+About $1–3/month of AWS, mostly inside the free tier, plus vision calls —
+roughly $26–31 per thousand receipts at Sonnet 5 standard pricing. Input
+dominates at ~92%, almost all of it image tokens, which is the second reason
+cropping earns its place.
+
+`/testing123` runs seven canned fixtures through the real `deriveBill()` logic,
+exercising the entire flow — including validation failure paths — without
+spending anything on a vision call. The fixtures share the production code path
+specifically so they cannot drift from it.
+
+### Things deliberately not built
+
+| Not built | Why |
+|---|---|
+| User accounts | Nothing to log in to. Telegram already knows who you are |
+| Payment integration | A phone number for PayNow is enough. Handling money would change the regulatory posture entirely |
+| Group roster / history | Would require storing who eats with whom — the single most sensitive thing here |
+| Custom domain | Both AWS-provided hostnames carry valid certificates, which is all Telegram requires |
+| Multi-region | A bill split is not a life-critical workload |
+| DynamoDB lock table | Terraform ≥1.10 locks via S3 conditional writes |
