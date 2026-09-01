@@ -5,8 +5,13 @@ on:
   push:
     branches: [main]
 
-# OIDC: no long-lived AWS keys in GitHub. Create a role that trusts this repo's
-# OIDC provider and set its ARN as the AWS_ROLE_ARN repository variable.
+# OIDC: no long-lived AWS keys in GitHub. The role is defined in
+# infra/github_oidc.tf; `terraform output github_actions_role_arn` gives the ARN.
+#
+# Both AWS_ROLE_ARN and TF_STATE_BUCKET are *secrets* rather than variables,
+# even though neither is really confidential: this repo is public, and Actions
+# echoes a step's inputs into the log. A variable would print verbatim, and both
+# values embed the AWS account id. Secrets are masked to `***`.
 permissions:
   contents: read
   id-token: write
@@ -78,8 +83,10 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+          # Keeps the account id out of the public log if anything prints it.
+          mask-aws-account-id: true
 
       - uses: hashicorp/setup-terraform@v3
         with:

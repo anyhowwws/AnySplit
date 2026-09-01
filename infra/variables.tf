@@ -17,10 +17,14 @@ variable "vision_model" {
 
 variable "ttl_days" {
   description = <<-EOT
-    Backstop retention for bills that are never finished. A completed bill is
-    deleted outright the moment its messages are sent, so this only covers
-    someone photographing a receipt and abandoning it — which needs hours, not
-    days.
+    How long a bill survives after the last action on it. Sending refreshes the
+    clock rather than ending it, so a split can still be corrected or re-sent —
+    one day is comfortably longer than any meal, and short enough that receipts
+    do not accumulate.
+
+    DynamoDB's TTL sweep can lag by up to 48 hours, so `ttl` is re-checked on
+    every read and expired bills are treated as absent. The promise holds
+    regardless of when AWS gets round to the delete.
   EOT
   type        = number
   default     = 1
@@ -37,6 +41,16 @@ variable "test_user_id" {
   EOT
   type        = string
   default     = ""
+}
+
+variable "github_repo" {
+  description = <<-EOT
+    The `owner/name` allowed to assume the CI role via OIDC. This is the only
+    thing separating that role from every other repository on GitHub, so it is
+    matched exactly — see github_oidc.tf. Change it if you fork this.
+  EOT
+  type        = string
+  default     = "anyhowwws/AnySplit"
 }
 
 variable "alarm_email" {

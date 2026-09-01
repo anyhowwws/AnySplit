@@ -25,6 +25,11 @@ output "cloudfront_distribution_id" {
   value       = aws_cloudfront_distribution.miniapp.id
 }
 
+output "github_actions_role_arn" {
+  description = "Set as the AWS_ROLE_ARN repository variable so CI can assume it."
+  value       = aws_iam_role.github_actions.arn
+}
+
 output "bills_table" {
   value = aws_dynamodb_table.bills.name
 }
