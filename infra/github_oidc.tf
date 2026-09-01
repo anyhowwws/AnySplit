@@ -120,6 +120,11 @@ data "aws_iam_policy_document" "github_actions" {
       "apigateway:GET",
       "cloudfront:Get*",
       "cloudfront:List*",
+      # Refreshing an alarm reads its tags, which is a separate action from
+      # DescribeAlarms and denied by default.
+      "cloudwatch:Describe*",
+      "cloudwatch:Get*",
+      "cloudwatch:List*",
       "dynamodb:Describe*",
       "dynamodb:ListTagsOfResource",
       "iam:Get*",
