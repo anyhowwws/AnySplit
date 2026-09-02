@@ -67,6 +67,14 @@ jobs:
     name: plan / apply
     runs-on: ubuntu-latest
     needs: build
+    # Values that live in the gitignored terraform.tfvars locally. Without them
+    # CI plans against the variables' empty defaults and *removes* what a local
+    # apply configured — which is exactly how the /testing123 gate was silently
+    # turned off. Secrets rather than variables so they stay out of the public
+    # run log; neither is confidential, but the log is world-readable.
+    env:
+      TF_VAR_alarm_email: ${{ secrets.ALARM_EMAIL }}
+      TF_VAR_test_user_id: ${{ secrets.TEST_USER_ID }}
     # This repo is public, so pull requests can come from forks. A fork PR gets a
     # read-only GITHUB_TOKEN regardless of the `permissions:` block above, so it
     # cannot mint an OIDC token and cannot reach AWS — by design. Skipping the

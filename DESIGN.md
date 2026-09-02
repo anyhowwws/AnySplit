@@ -438,7 +438,26 @@ while the first attempt keeps failing. `vision call complete` carries
 `inputTokens`, which scales with image area, so a jump means cropping stopped
 working rather than that receipts got longer.
 
-Alarms cover DLQ depth and API error rate.
+Seven alarms, all publishing to one SNS topic. Three of them exist because a
+log line nobody queries is not a detection:
+
+| Alarm | Fires when | Catches |
+|---|---|---|
+| `bad-webhook-secret` | any occurrence | The API Gateway URL is known to someone who is not Telegram |
+| `bill-access-denied` | any occurrence | A request for someone else's bill — not a typo at 72 bits of entropy |
+| `slow-acks` | >3 in 5 min | Telegram is redelivering faster than the bot answers; the "dead bot" failure |
+| `parse-failures` | >2 in 15 min | The vision path itself is broken, which the DLQ alarm **cannot** see — an unrecoverable parse is handled, so it never reaches the DLQ |
+| `vision-call-volume` | >50 in 1 hour | Someone is spamming receipts at a bot with no rate limit. Each call is paid |
+| `parse-dlq-not-empty` | any message | A receipt failed three times |
+| `api-errors` | >5 in 5 min | The api Lambda is throwing before it can log |
+
+Every one sets `treat_missing_data = "notBreaching"`, because a metric filter's
+metric does not exist until it first matches — and missing reads as neither OK
+nor breaching. Without it, a quiet day would page.
+
+The subscription matters as much as the alarms. `alarm_email` defaults to
+empty, and the topic will happily accept publishes with nobody subscribed,
+which looks exactly like nothing being wrong.
 
 ### Cost
 

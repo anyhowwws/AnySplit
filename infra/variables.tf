@@ -72,9 +72,31 @@ variable "github_repo_id" {
 }
 
 variable "alarm_email" {
-  description = "Address that receives DLQ alarms. Leave empty to skip the subscription."
+  description = <<-EOT
+    Address that receives every alarm. Leave empty to skip the subscription —
+    but note that the alarms still exist and still fire, they simply publish to
+    a topic with no subscribers, which is indistinguishable from nothing being
+    wrong. Set this.
+
+    AWS sends a confirmation link on first apply; the subscription delivers
+    nothing until it is clicked.
+  EOT
   type        = string
   default     = ""
+}
+
+variable "vision_calls_per_hour_alarm" {
+  description = <<-EOT
+    Vision calls in one hour above which the cost alarm fires. Each call is a
+    paid request, so this is the tripwire for someone spamming receipts at a
+    bot that does not yet rate-limit them.
+
+    Set well above ordinary use and well below anything that would hurt: at
+    roughly 2.6 cents a receipt, 50 an hour is about $1.30 — noticeable, not
+    damaging.
+  EOT
+  type        = number
+  default     = 50
 }
 
 variable "log_retention_days" {

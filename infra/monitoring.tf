@@ -1,13 +1,17 @@
 # ---------------------------------------------------------------- usage
 #
-# Usage is measured from the logs rather than from stored data. Bills are
-# deleted as soon as their messages send, so there is no table to count rows in
-# — and deliberately so. Metric filters turn the structured log lines into real
-# metrics, which CloudWatch keeps for 15 months against the logs' 14 days, and
-# which can be graphed and alarmed on.
+# Usage and health are measured from the logs rather than from stored data.
+# Bills expire 24 hours after the last action on them, so there is no table to
+# count rows in — deliberately. Metric filters turn the structured log lines
+# into real metrics, which CloudWatch keeps for 15 months against the logs' 14
+# days, and which can be graphed and alarmed on.
 #
 # None of these carry user identity: they are counts of events, and the user
 # ids in the underlying lines are HMAC'd (see backend/src/lib/userref.ts).
+#
+# A metric only exists once its filter has matched something, and a metric with
+# no data reads as "missing" rather than zero — which is why every alarm below
+# sets `treat_missing_data = "notBreaching"`. Without it a quiet day would page.
 
 locals {
   usage_metrics = {
@@ -37,6 +41,66 @@ locals {
       msg       = "unrecoverable parse, not retrying"
       metric    = "ParseFailures"
     }
+
+    # ------------------------------------------------------------- security
+    #
+    # Both of these should read zero forever. They are logged either way; the
+    # point of lifting them into metrics is that a log line nobody queries is
+    # not a detection.
+
+    # Someone reached the webhook without the shared secret. Telegram always
+    # sends it, so this means the API Gateway URL is known to somebody else.
+    bad_webhook_secret = {
+      log_group = aws_cloudwatch_log_group.api.name
+      msg       = "webhook rejected: bad secret token"
+      metric    = "BadWebhookSecret"
+    }
+    # Someone asked for a bill that is not theirs. Bill ids carry 72 bits of
+    # entropy, so this is not a typo.
+    bill_access_denied = {
+      log_group = aws_cloudwatch_log_group.api.name
+      msg       = "bill access denied"
+      metric    = "BillAccessDenied"
+    }
+
+    # --------------------------------------------------------------- health
+    #
+    # Telegram redelivers any update it does not see acknowledged in about five
+    # seconds. Sustained slow acks are the leading edge of the failure the
+    # README describes as "what a dead bot looks like": the retry arrives, gets
+    # dropped as a duplicate, and the user sees nothing at all.
+    slow_acks = {
+      log_group = aws_cloudwatch_log_group.api.name
+      msg       = "update handled but over telegram ack budget"
+      metric    = "SlowAcks"
+    }
+
+    # Every vision call, successful or not. ReceiptsParsed counts only the ones
+    # that produced items; this one counts the ones that cost money.
+    vision_calls = {
+      log_group = aws_cloudwatch_log_group.parser.name
+      msg       = "vision call complete"
+      metric    = "VisionCalls"
+    }
+  }
+}
+
+# The only filter that extracts a value rather than counting occurrences, so it
+# cannot share the loop above. Input tokens dominate the bill — around 92% of it
+# — and scale with image area, so this doubles as the signal that cropping has
+# stopped working: a step change here without a matching rise in VisionCalls
+# means the images got bigger, not more numerous.
+resource "aws_cloudwatch_log_metric_filter" "vision_input_tokens" {
+  name           = "${local.name}-vision-input-tokens"
+  log_group_name = aws_cloudwatch_log_group.parser.name
+  pattern        = "{ $.msg = \"vision call complete\" }"
+
+  metric_transformation {
+    name          = "VisionInputTokens"
+    namespace     = "AnySplit"
+    value         = "$.inputTokens"
+    unit          = "Count"
+    default_value = "0"
   }
 }
 
@@ -115,4 +179,108 @@ resource "aws_cloudwatch_metric_alarm" "api_errors" {
 
   alarm_description = "The api Lambda is erroring; the webhook may be failing."
   alarm_actions     = [aws_sns_topic.alarms.arn]
+}
+
+# ------------------------------------------------------- security tripwires
+#
+# Threshold zero on both: these count events that should never happen once, so
+# any occurrence is the signal. CloudWatch notifies on the transition into
+# ALARM rather than on every breaching period, so a sustained probe produces
+# one email, not one every five minutes.
+
+resource "aws_cloudwatch_metric_alarm" "bad_webhook_secret" {
+  alarm_name          = "${local.name}-bad-webhook-secret"
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 0
+  evaluation_periods  = 1
+  period              = 300
+  namespace           = "AnySplit"
+  metric_name         = "BadWebhookSecret"
+  statistic           = "Sum"
+  treat_missing_data  = "notBreaching"
+
+  alarm_description = "Someone posted to the webhook without the shared secret. Telegram always sends it, so the API Gateway URL is known to somebody else. Rotate the webhook secret and re-run setWebhook."
+  alarm_actions     = [aws_sns_topic.alarms.arn]
+  ok_actions        = [aws_sns_topic.alarms.arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "bill_access_denied" {
+  alarm_name          = "${local.name}-bill-access-denied"
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 0
+  evaluation_periods  = 1
+  period              = 300
+  namespace           = "AnySplit"
+  metric_name         = "BillAccessDenied"
+  statistic           = "Sum"
+  treat_missing_data  = "notBreaching"
+
+  alarm_description = "A request asked for a bill belonging to someone else. Bill ids carry 72 bits of entropy, so this is not an accident."
+  alarm_actions     = [aws_sns_topic.alarms.arn]
+  ok_actions        = [aws_sns_topic.alarms.arn]
+}
+
+# ------------------------------------------------------------------- health
+
+# One slow ack is a cold start. Several in five minutes means Telegram is
+# redelivering faster than the bot is answering, and users are seeing nothing.
+resource "aws_cloudwatch_metric_alarm" "slow_acks" {
+  alarm_name          = "${local.name}-slow-acks"
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 3
+  evaluation_periods  = 1
+  period              = 300
+  namespace           = "AnySplit"
+  metric_name         = "SlowAcks"
+  statistic           = "Sum"
+  treat_missing_data  = "notBreaching"
+
+  alarm_description = "Updates are being handled too slowly for Telegram's acknowledgement window, so it is redelivering them."
+  alarm_actions     = [aws_sns_topic.alarms.arn]
+  ok_actions        = [aws_sns_topic.alarms.arn]
+}
+
+# The gap the DLQ alarm cannot see. An unrecoverable parse is *handled* — the
+# bill is marked errored and the message consumed — so it never reaches the
+# DLQ. Without this, a revoked Anthropic key or a withdrawn model would fail
+# every receipt cleanly and leave both original alarms green.
+#
+# Blurry photos fail too, so the threshold is set for a run of them rather than
+# a single one: over a quarter of an hour, three is a pattern.
+resource "aws_cloudwatch_metric_alarm" "parse_failures" {
+  alarm_name          = "${local.name}-parse-failures"
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 2
+  evaluation_periods  = 1
+  period              = 900
+  namespace           = "AnySplit"
+  metric_name         = "ParseFailures"
+  statistic           = "Sum"
+  treat_missing_data  = "notBreaching"
+
+  alarm_description = "Several receipts in a row failed to parse. If they are not all bad photos, the vision path itself is broken."
+  alarm_actions     = [aws_sns_topic.alarms.arn]
+  ok_actions        = [aws_sns_topic.alarms.arn]
+}
+
+# --------------------------------------------------------------------- cost
+#
+# The only alarm here that guards money rather than correctness. Nothing in the
+# bot currently limits how many receipts one person can send, so this is the
+# detection half of that problem — it does not stop a flood, it tells you one is
+# happening while it still costs cents.
+resource "aws_cloudwatch_metric_alarm" "vision_call_volume" {
+  alarm_name          = "${local.name}-vision-call-volume"
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = var.vision_calls_per_hour_alarm
+  evaluation_periods  = 1
+  period              = 3600
+  namespace           = "AnySplit"
+  metric_name         = "VisionCalls"
+  statistic           = "Sum"
+  treat_missing_data  = "notBreaching"
+
+  alarm_description = "Vision calls in the last hour exceeded the expected ceiling. Each one is a paid API call."
+  alarm_actions     = [aws_sns_topic.alarms.arn]
+  ok_actions        = [aws_sns_topic.alarms.arn]
 }

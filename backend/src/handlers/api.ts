@@ -278,7 +278,7 @@ app.post('/api/bills/:id/finalise', async (c) => {
     total: bill.total,
     sum: shares.reduce((a, s) => a + s.cents, 0),
     // Whether one was given, never the number itself — it is someone's personal
-    // contact detail and CloudWatch outlives the bill's 7-day TTL.
+    // contact detail, and at 14 days the logs outlive the bill's 24 hours.
     mode,
     hasPayee: payee !== null,
     hasPayeePhone: Boolean(payee?.phone),
