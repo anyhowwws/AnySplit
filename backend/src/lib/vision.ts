@@ -3,7 +3,7 @@ import type { ParsedReceipt } from '../../../shared/types.ts';
 import { config } from './config.ts';
 import { isCents } from './money.ts';
 import { log } from './log.ts';
-import { anthropicKey } from './secrets.ts';
+import { visionClient } from './anthropic.ts';
 
 export type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
 
@@ -158,7 +158,7 @@ export async function parseReceipt(image: ReceiptImage): Promise<ParsedReceipt> 
 
 async function attemptParse(image: ReceiptImage): Promise<ParsedReceipt> {
   const started = Date.now();
-  const client = new Anthropic({ apiKey: await anthropicKey() });
+  const client = await visionClient();
 
   const response = await client.messages.create({
     model: config.visionModel(),

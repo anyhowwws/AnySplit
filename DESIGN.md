@@ -69,7 +69,7 @@ the two bootstrap items noted at the bottom.
 | DynamoDB `anysplit-bills` | `dynamodb.tf` | Single table, TTL enabled |
 | SQS `parse-queue` + DLQ | `sqs.tf` | Decouples the slow vision call from the webhook |
 | S3 + CloudFront | `s3.tf`, `cloudfront.tf` | Static Mini App, private bucket, OAC only |
-| SSM Parameter Store | `main.tf` (data) | Bot token, Anthropic key, webhook secret |
+| SSM Parameter Store | `main.tf` | Bot token, webhook secret, user-reference HMAC key. **No Anthropic key** |
 | IAM roles | `iam.tf` | One least-privilege role per Lambda |
 | OIDC provider + CI role | `github_oidc.tf` | Keyless deploys from GitHub Actions |
 | Log groups, metric filters, alarms, SNS | `monitoring.tf`, `lambda.tf` | Observability |
@@ -84,7 +84,9 @@ the two bootstrap items noted at the bottom.
 
 Created out-of-band, because they cannot bootstrap themselves: the **S3 state
 bucket** (Terraform cannot create its own backend) and the **three SSM
-SecureStrings** (deliberately never in Terraform state — see §4).
+SecureStrings** — bot token, webhook secret, and user-reference HMAC key —
+which are deliberately kept out of Terraform state (see §4). There is no
+Anthropic key among them: the parser federates its IAM role instead.
 
 ### Why this shape
 
@@ -426,6 +428,14 @@ mistakes.
   anyway — the mitigation was half of the one it needed to be.
 - **Least privilege per function.** The `api` role cannot consume the queue;
   the `parser` role cannot send to it. Neither can delete a bill.
+- **No Anthropic API key exists.** The parser mints an AWS-signed JWT asserting
+  its own role ARN (`sts:GetWebIdentityToken`) and exchanges it for a token that
+  lives minutes. The federation rule pins that JWT's `sub` to the exact role, so
+  the IAM role *is* the credential. This is the same shape as the GitHub Actions
+  trust policy, one layer up — and it means the class of problem that produced
+  three secrets in Terraform state cannot recur for this one, because there is
+  no secret. The only static credential left in the system is the Telegram bot
+  token, which Telegram offers no alternative to.
 
 ### Observability
 

@@ -90,8 +90,14 @@ resource "aws_lambda_function" "parser" {
 
   environment {
     variables = merge(local.common_env, {
-      SSM_ANTHROPIC_KEY = local.ssm.anthropic_key
-      VISION_MODEL      = var.vision_model
+      VISION_MODEL = var.vision_model
+
+      # Workload identity federation. Not secrets: none of these grants
+      # anything without an AWS-signed JWT whose `sub` matches the rule.
+      ANTHROPIC_FEDERATION_RULE_ID = var.anthropic_federation_rule_id
+      ANTHROPIC_ORGANIZATION_ID    = var.anthropic_organization_id
+      ANTHROPIC_SERVICE_ACCOUNT_ID = var.anthropic_service_account_id
+      ANTHROPIC_WORKSPACE_ID       = var.anthropic_workspace_id
     })
   }
 

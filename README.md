@@ -40,7 +40,10 @@ spending anything on a vision call.
 - Terraform ≥ 1.10 (1.15 in use), and AWS credentials for a dedicated IAM user.
   Note the `AWS_PROFILE=terraform` requirement — see [infra/README.md](infra/README.md).
 - A bot token from [@BotFather](https://t.me/BotFather).
-- An Anthropic API key.
+- An Anthropic API key **only for `scripts/parse.ts`**. The deployed bot has
+  none: the parser authenticates by workload identity federation, exchanging an
+  AWS-signed assertion of its own IAM role for a short-lived token. See
+  [DESIGN.md](DESIGN.md) § Security posture.
 
 ## Layout
 

@@ -85,6 +85,45 @@ variable "alarm_email" {
   default     = ""
 }
 
+# ------------------------------------------------- workload identity federation
+#
+# The parser authenticates to the Anthropic API with no API key: it mints an
+# AWS-signed JWT asserting its own role ARN and exchanges it for a short-lived
+# token. These four values name the Console resources that exchange targets.
+#
+# None is a secret — an attacker holding all four still cannot get a token
+# without being able to assume the parser's IAM role — but they identify the
+# account, and this repository is public, so they live in terraform.tfvars
+# (gitignored) and reach CI as TF_VAR_ secrets, like every other identifier here.
+
+variable "anthropic_federation_rule_id" {
+  description = "Federation rule (fdrl_...) the token exchange targets. From Settings → Workload identity."
+  type        = string
+  default     = ""
+}
+
+variable "anthropic_organization_id" {
+  description = "Anthropic organization UUID that owns the federation rule."
+  type        = string
+  default     = ""
+}
+
+variable "anthropic_service_account_id" {
+  description = "Service account (svac_...) the minted token acts as."
+  type        = string
+  default     = ""
+}
+
+variable "anthropic_workspace_id" {
+  description = <<-EOT
+    Workspace (wrkspc_...) to scope the minted token to. Only required when the
+    federation rule covers more than one non-default workspace; leave empty and
+    the server picks the rule's sole workspace.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "rate_user_hour" {
   description = <<-EOT
     Receipts one person may have parsed per hour. Generous for a real meal —

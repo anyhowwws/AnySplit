@@ -52,7 +52,6 @@ locals {
 locals {
   ssm = {
     bot_token      = "/${local.name}/bot-token"
-    anthropic_key  = "/${local.name}/anthropic-key"
     webhook_secret = "/${local.name}/webhook-secret"
     # Keyed independently of the bot token so that rotating the token does not
     # re-key every pseudonymous user reference. See backend/src/lib/userref.ts.

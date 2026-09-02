@@ -75,6 +75,9 @@ jobs:
     env:
       TF_VAR_alarm_email: ${{ secrets.ALARM_EMAIL }}
       TF_VAR_test_user_id: ${{ secrets.TEST_USER_ID }}
+      TF_VAR_anthropic_federation_rule_id: ${{ secrets.ANTHROPIC_FEDERATION_RULE_ID }}
+      TF_VAR_anthropic_service_account_id: ${{ secrets.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+      TF_VAR_anthropic_organization_id: ${{ secrets.ANTHROPIC_ORGANIZATION_ID }}
     # This repo is public, so pull requests can come from forks. A fork PR gets a
     # read-only GITHUB_TOKEN regardless of the `permissions:` block above, so it
     # cannot mint an OIDC token and cannot reach AWS — by design. Skipping the

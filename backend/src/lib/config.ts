@@ -48,6 +48,24 @@ export const config = {
   ttlSeconds: () => Number(optional('TTL_SECONDS', String(86400))),
 
   /**
+   * Identifiers for the workload identity exchange. Not secrets — none of them
+   * grants anything without a JWT from the registered issuer whose `sub`
+   * matches the rule — but they are account identifiers, so they come from
+   * Terraform rather than being committed.
+   *
+   * Required rather than optional: a deployment missing them cannot
+   * authenticate at all, and failing on the first parse with a named missing
+   * variable beats a 401 from the exchange endpoint.
+   */
+  federation: () => ({
+    ruleId: required('ANTHROPIC_FEDERATION_RULE_ID'),
+    organizationId: required('ANTHROPIC_ORGANIZATION_ID'),
+    serviceAccountId: process.env['ANTHROPIC_SERVICE_ACCOUNT_ID'] || undefined,
+    // Only needed when the rule spans more than one workspace.
+    workspaceId: process.env['ANTHROPIC_WORKSPACE_ID'] || undefined,
+  }),
+
+  /**
    * Ceilings on receipts accepted for parsing, per fixed window.
    *
    * Every photo is a paid vision call, and anyone who can find the bot can send

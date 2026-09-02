@@ -57,9 +57,11 @@ export function botToken(): Promise<string> {
   return fromEnvOrSsm('BOT_TOKEN', 'SSM_BOT_TOKEN');
 }
 
-export function anthropicKey(): Promise<string> {
-  return fromEnvOrSsm('ANTHROPIC_API_KEY', 'SSM_ANTHROPIC_KEY');
-}
+// There is deliberately no anthropicKey() here any more. The vision call
+// authenticates through workload identity federation — see anthropic.ts — so no
+// Anthropic key is stored in SSM, in Terraform state, or anywhere else. The
+// only remaining key is the one scripts/parse.ts reads straight from .env for
+// local runs, which never touches this module.
 
 /** Shared secret Telegram echoes in X-Telegram-Bot-Api-Secret-Token. */
 export function webhookSecret(): Promise<string> {

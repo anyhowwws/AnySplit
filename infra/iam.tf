@@ -111,9 +111,19 @@ data "aws_iam_policy_document" "parser" {
     ]
     resources = [
       local.ssm_arn.bot_token,
-      local.ssm_arn.anthropic_key,
       local.ssm_arn.userref_salt,
     ]
+  }
+
+  # Mints the AWS-signed JWT that is exchanged for an Anthropic access token.
+  # This permission *is* the Anthropic credential now: anything able to assume
+  # this role can obtain a token, and nothing else can. GetWebIdentityToken
+  # takes no resource qualifier, so the scope is the role, not the ARN list.
+  statement {
+    sid       = "MintIdentityToken"
+    effect    = "Allow"
+    actions   = ["sts:GetWebIdentityToken"]
+    resources = ["*"]
   }
 }
 

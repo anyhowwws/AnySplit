@@ -38,7 +38,6 @@ values from SSM at runtime.
 
 ```bash
 aws ssm put-parameter --name /anysplit/bot-token      --type SecureString --value "123456:ABC..."
-aws ssm put-parameter --name /anysplit/anthropic-key  --type SecureString --value "sk-ant-..."
 aws ssm put-parameter --name /anysplit/webhook-secret --type SecureString --value "$(openssl rand -hex 16)"
 # Keyed independently of the bot token, so the token can be rotated without
 # re-hashing every pseudonymous user reference. Never rotate this one.
@@ -48,6 +47,13 @@ aws ssm put-parameter --name /anysplit/userref-salt   --type SecureString --valu
 Why the indirection: passing a secret's value into a Lambda `environment` block
 writes the plaintext into `terraform.tfstate`. That is the same leak as putting
 it in a `resource`, one step removed.
+
+There is deliberately no Anthropic API key here. The parser authenticates by
+workload identity federation: it calls `sts:GetWebIdentityToken` to mint an
+AWS-signed JWT asserting its own role ARN, and the SDK exchanges that for a
+short-lived Anthropic token. Nothing static exists to store, rotate, or leak.
+The federation rule pins the JWT's `sub` to the parser's exact role ARN, so
+holding the role is the credential — see `backend/src/lib/anthropic.ts`.
 
 The paths are declared as **plain strings** in `main.tf`, not as
 `data "aws_ssm_parameter"` blocks, and that distinction matters more than it
