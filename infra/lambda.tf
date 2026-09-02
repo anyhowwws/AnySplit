@@ -28,8 +28,10 @@ locals {
   common_env = {
     BILLS_TABLE   = aws_dynamodb_table.bills.name
     MINIAPP_URL   = "https://${aws_cloudfront_distribution.miniapp.domain_name}"
-    SSM_BOT_TOKEN = data.aws_ssm_parameter.bot_token.name
+    SSM_BOT_TOKEN = local.ssm.bot_token
     TTL_SECONDS   = tostring(var.ttl_days * 86400)
+    # Both functions hash user ids before logging them, so both need the key.
+    SSM_USERREF_SALT = local.ssm.userref_salt
   }
 }
 
@@ -51,7 +53,7 @@ resource "aws_lambda_function" "api" {
   environment {
     variables = merge(local.common_env, {
       PARSE_QUEUE_URL    = aws_sqs_queue.parse.id
-      SSM_WEBHOOK_SECRET = data.aws_ssm_parameter.webhook_secret.name
+      SSM_WEBHOOK_SECRET = local.ssm.webhook_secret
       TEST_USER_ID       = var.test_user_id
 
       # Ceilings on paid vision calls. Env vars rather than constants so a limit
@@ -88,7 +90,7 @@ resource "aws_lambda_function" "parser" {
 
   environment {
     variables = merge(local.common_env, {
-      SSM_ANTHROPIC_KEY = data.aws_ssm_parameter.anthropic_key.name
+      SSM_ANTHROPIC_KEY = local.ssm.anthropic_key
       VISION_MODEL      = var.vision_model
     })
   }

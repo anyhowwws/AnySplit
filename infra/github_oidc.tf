@@ -2,8 +2,6 @@
 # exist for CI: GitHub mints a short-lived OIDC token per job, AWS verifies it
 # against the provider below, and STS hands back credentials good for one run.
 
-data "aws_caller_identity" "current" {}
-
 locals {
   # The state bucket is created out-of-band and its name is deliberately not in
   # git (see backend.tf), but it is derivable — so CI's policy can name it

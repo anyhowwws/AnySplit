@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { botToken } from './secrets.ts';
+import { userRefSalt } from './secrets.ts';
 
 /**
  * A stable, non-reversible stand-in for a Telegram user id.
@@ -22,20 +22,25 @@ import { botToken } from './secrets.ts';
 let saltPromise: Promise<string> | null = null;
 
 /**
- * The bot token doubles as the HMAC key: high-entropy, already in SSM, already
- * fetched by both Lambdas, so a dedicated salt would be one more secret to
- * provision for no additional protection.
+ * A dedicated SSM parameter, not the bot token.
  *
- * One consequence to know about, now that these references key a permanent
- * usage row rather than only a 14-day log line. **Rotating the bot token
- * re-hashes every user**, so everyone seen before the rotation is counted again
- * as new and the unique-user total steps up. Nothing is lost or exposed — the
- * old rows simply become unreachable — but the statistic breaks at that point.
- * If the token ever needs rotating, move this key to its own SSM parameter
- * first and the references survive.
+ * The token was the obvious key — high-entropy, already in SSM, already fetched
+ * by both Lambdas — and it was fine while these references only appeared in
+ * logs that expire after 14 days. It stopped being fine once they became the
+ * key of a usage row meant to outlive everything: rotating the token would
+ * re-hash every user, so everyone already counted would be counted again as
+ * new, and the one statistic these references exist to produce would quietly
+ * break.
+ *
+ * The deeper problem was the coupling. Rotation is what you do when a token
+ * leaks, and it should never carry a hidden cost that makes anyone hesitate.
+ * These are now independent: rotate the token freely, and the references hold.
+ *
+ * Rotating *this* parameter does re-key everything, so it should not be
+ * rotated — it protects no access, only the linkability of a count.
  */
 function salt(): Promise<string> {
-  if (!saltPromise) saltPromise = botToken();
+  if (!saltPromise) saltPromise = userRefSalt();
   return saltPromise;
 }
 

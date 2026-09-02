@@ -51,8 +51,9 @@ data "aws_iam_policy_document" "api" {
       "ssm:GetParameter",
     ]
     resources = [
-      data.aws_ssm_parameter.bot_token.arn,
-      data.aws_ssm_parameter.webhook_secret.arn,
+      local.ssm_arn.bot_token,
+      local.ssm_arn.webhook_secret,
+      local.ssm_arn.userref_salt,
     ]
   }
 }
@@ -109,8 +110,9 @@ data "aws_iam_policy_document" "parser" {
       "ssm:GetParameter",
     ]
     resources = [
-      data.aws_ssm_parameter.bot_token.arn,
-      data.aws_ssm_parameter.anthropic_key.arn,
+      local.ssm_arn.bot_token,
+      local.ssm_arn.anthropic_key,
+      local.ssm_arn.userref_salt,
     ]
   }
 }

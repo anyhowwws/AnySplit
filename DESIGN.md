@@ -413,11 +413,17 @@ mistakes.
 - **Admin-only mutation.** Only the payer who sent the photo can read or modify
   a bill. Recipients receive their share through the bot, never the API.
 - **Unguessable bill IDs.** 72 bits of entropy.
-- **Secrets never enter Terraform state.** Terraform passes SSM parameter
-  *paths*; Lambda resolves values at runtime. Reading a SecureString through a
-  `data` source and passing the value into a Lambda environment block would
-  write the plaintext into `terraform.tfstate` — the same leak as hardcoding
-  it, one step removed.
+- **Secrets never enter Terraform state.** Terraform is given SSM parameter
+  *paths*; Lambda resolves the values at runtime. Passing a value into a Lambda
+  environment block would write plaintext into `terraform.tfstate` — the same
+  leak as hardcoding it, one step removed.
+
+  The subtler half of this took a second pass to get right. The paths are plain
+  strings, not `data "aws_ssm_parameter"` blocks, because a data source fetches
+  the parameter *decrypted* and stores the value in state even when only its
+  name is referenced. The original design avoided passing values to Lambda but
+  still read them through data sources, so all three secrets were in state
+  anyway — the mitigation was half of the one it needed to be.
 - **Least privilege per function.** The `api` role cannot consume the queue;
   the `parser` role cannot send to it. Neither can delete a bill.
 

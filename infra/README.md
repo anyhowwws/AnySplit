@@ -40,12 +40,22 @@ values from SSM at runtime.
 aws ssm put-parameter --name /anysplit/bot-token      --type SecureString --value "123456:ABC..."
 aws ssm put-parameter --name /anysplit/anthropic-key  --type SecureString --value "sk-ant-..."
 aws ssm put-parameter --name /anysplit/webhook-secret --type SecureString --value "$(openssl rand -hex 16)"
+# Keyed independently of the bot token, so the token can be rotated without
+# re-hashing every pseudonymous user reference. Never rotate this one.
+aws ssm put-parameter --name /anysplit/userref-salt   --type SecureString --value "$(openssl rand -hex 32)"
 ```
 
-Why the indirection: reading a SecureString through a `data` source and passing
-the value into a Lambda `environment` block writes the plaintext into
-`terraform.tfstate`. That is the same leak as putting it in a `resource`, one
-step removed.
+Why the indirection: passing a secret's value into a Lambda `environment` block
+writes the plaintext into `terraform.tfstate`. That is the same leak as putting
+it in a `resource`, one step removed.
+
+The paths are declared as **plain strings** in `main.tf`, not as
+`data "aws_ssm_parameter"` blocks, and that distinction matters more than it
+looks. A data source reads the parameter — decrypted — and stores the value in
+state even when only its `.name` or `.arn` is referenced. This project used data
+sources for exactly that, referencing only the name, and had all three secrets
+sitting in state as a result. Constructing the paths and ARNs by hand costs
+nothing: neither is secret, and both appear in this file.
 
 ## Credentials
 
@@ -147,7 +157,7 @@ aws iam simulate-principal-policy \
 
 | File | Contains |
 |---|---|
-| `main.tf` | provider, locals, SSM `data` sources |
+| `main.tf` | provider, locals, SSM parameter paths |
 | `backend.tf` | S3 remote state, bucket supplied via `backend.hcl` |
 | `github_oidc.tf` | OIDC provider and the role CI assumes |
 | `dynamodb.tf` | bills table, TTL enabled |
@@ -157,7 +167,7 @@ aws iam simulate-principal-policy \
 | `apigw.tf` | HTTP API, `ANY /{proxy+}`, `$default` stage, CORS |
 | `s3.tf` | private Mini App bucket, OAC-only policy |
 | `cloudfront.tf` | distribution with SPA error mapping |
-| `monitoring.tf` | SNS topic, DLQ-depth and api-error alarms |
+| `monitoring.tf` | SNS topic, metric filters, seven alarms |
 | `outputs.tf` | URLs and names the deploy steps need |
 
 ## Notes

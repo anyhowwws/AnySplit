@@ -4,11 +4,16 @@ import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
  * Secrets are fetched from SSM Parameter Store at runtime, not injected as
  * environment variables.
  *
- * The reason is Terraform state. Reading a SecureString through a `data` source
- * and passing it into a Lambda `environment` block writes the plaintext value
- * into terraform.tfstate — the same leak as putting it in a `resource`, one step
- * removed. Terraform only ever sees the parameter *path*; the value is resolved
- * here, once per container.
+ * The reason is Terraform state. A value passed into a Lambda `environment`
+ * block is written into terraform.tfstate in plaintext — the same leak as
+ * putting it in a `resource`, one step removed. Terraform is given the
+ * parameter *path* and nothing else; the value is resolved here, once per
+ * container.
+ *
+ * Worth knowing that the path is not enough on its own: `data
+ * "aws_ssm_parameter"` fetches and stores the decrypted value in state even
+ * when only its name is referenced, which is why infra/main.tf declares these
+ * paths as plain strings instead.
  */
 
 const ssm = new SSMClient({});
@@ -59,4 +64,18 @@ export function anthropicKey(): Promise<string> {
 /** Shared secret Telegram echoes in X-Telegram-Bot-Api-Secret-Token. */
 export function webhookSecret(): Promise<string> {
   return fromEnvOrSsm('WEBHOOK_SECRET', 'SSM_WEBHOOK_SECRET');
+}
+
+/**
+ * HMAC key for pseudonymous user references.
+ *
+ * Its own parameter rather than the bot token, which it used to be. That was
+ * defensible while these references only lived in 14-day logs, but they now key
+ * a usage row that is meant to outlive everything — and rotating the bot token
+ * would silently re-key every one of them, so every returning user would count
+ * as new. Separating them means the token can be rotated freely, which matters
+ * because rotation is the response to a leak and should never be discouraged.
+ */
+export function userRefSalt(): Promise<string> {
+  return fromEnvOrSsm('USERREF_SALT', 'SSM_USERREF_SALT');
 }
