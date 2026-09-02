@@ -26,4 +26,21 @@ resource "aws_lambda_event_source_mapping" "parse" {
 
   # Lets the parser fail one record without forcing redelivery of its siblings.
   function_response_types = ["ReportBatchItemFailures"]
+
+  # Caps how many parsers SQS will run at once, which bounds both the vision
+  # spend rate and — more importantly here — how much of the account's
+  # concurrency the parser can take.
+  #
+  # This account's Lambda limit is 10 concurrent executions in total, shared
+  # with the api function. Left uncapped, a burst of receipts would take all
+  # ten, and the webhook would start throttling: Telegram would stop getting
+  # acknowledged, retry, and the bot would appear dead to everyone — including
+  # people not involved in the burst.
+  #
+  # Capped on the event source rather than as reserved_concurrent_executions on
+  # the function, because AWS requires 10 unreserved executions to remain
+  # account-wide and reserving any at this limit is rejected outright.
+  scaling_config {
+    maximum_concurrency = var.parser_max_concurrency
+  }
 }

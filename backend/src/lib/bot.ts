@@ -8,9 +8,11 @@ import {
   esc,
   parsedSummary,
   privacyText,
+  rateLimitText,
   recipientBreakdown,
   splitButtonLabel,
 } from './format.ts';
+import { claimParse } from './ratelimit.ts';
 import { FIXTURES, fixtureNames } from './fixtures.ts';
 import { newBillId, parseStartPayload } from './ids.ts';
 import { deriveBill } from './receipt.ts';
@@ -80,6 +82,19 @@ async function handleImage(ctx: Context): Promise<void> {
   const ref = imageFrom(ctx.msg);
   if (!ref) {
     await ctx.reply("That file isn't an image I can read. Send a photo, JPEG, or PNG.");
+    return;
+  }
+
+  // Before the bill exists and before anything is queued: a refusal here costs
+  // one conditional write, where a refusal after enqueueing would already have
+  // paid for the vision call.
+  const refused = await claimParse(ctx.from.id);
+  if (refused) {
+    log.warn('rate limited', {
+      scope: refused.scope,
+      admin: await userRef(ctx.from.id),
+    });
+    await ctx.reply(rateLimitText(refused));
     return;
   }
 

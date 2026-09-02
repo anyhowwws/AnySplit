@@ -199,6 +199,62 @@ export async function recordUse(userId: number | undefined): Promise<void> {
 }
 
 /**
+ * Consumes one unit from a fixed-window counter. Returns false when the window
+ * is already full.
+ *
+ * The whole check is a single conditional UpdateItem: increment, but only if
+ * the counter is below the ceiling. DynamoDB evaluates the condition and the
+ * increment as one atomic operation, so two Lambdas racing on the same key
+ * cannot both succeed on the last remaining unit — which a read-then-write
+ * would happily allow.
+ *
+ * Windows are fixed rather than sliding: the key carries the window's start, so
+ * counters partition themselves and expire on their own via `ttl` instead of
+ * needing to be swept. The cost of that simplicity is the boundary case — a
+ * user can spend a full window's allowance either side of a rollover and get
+ * double the nominal rate briefly. For a ceiling that exists to stop runaway
+ * spend rather than to meter fairly, that is an acceptable trade against
+ * keeping a sliding log of every request.
+ */
+export async function claimQuota(
+  key: string,
+  max: number,
+  windowSeconds: number,
+): Promise<boolean> {
+  const windowStart = Math.floor(now() / windowSeconds) * windowSeconds;
+
+  try {
+    await client.send(
+      new UpdateCommand({
+        TableName: config.tableName(),
+        Key: { billId: `rl#${key}#${windowStart}` },
+        UpdateExpression: 'SET #ttl = if_not_exists(#ttl, :exp) ADD hits :one',
+        ConditionExpression: 'attribute_not_exists(hits) OR hits < :max',
+        ExpressionAttributeNames: { '#ttl': 'ttl' },
+        ExpressionAttributeValues: {
+          ':one': 1,
+          ':max': max,
+          // A few minutes past the window so a clock skew can't resurrect a
+          // counter that should have lapsed.
+          ':exp': windowStart + windowSeconds + 300,
+        },
+      }),
+    );
+    return true;
+  } catch (err) {
+    if (err instanceof Error && err.name === 'ConditionalCheckFailedException') {
+      return false;
+    }
+    // Fail open, matching claimUpdate. A DynamoDB blip should not stop people
+    // splitting bills, and the vision-call-volume alarm still catches a flood
+    // that slips through — an outage degrades the ceiling to detection rather
+    // than removing it.
+    log.warn('quota check failed open', { key, err: String(err) });
+    return true;
+  }
+}
+
+/**
  * Telegram retries any webhook that doesn't get a fast 200, so the same
  * update_id can arrive several times. First caller wins; later callers get
  * false and drop the update.

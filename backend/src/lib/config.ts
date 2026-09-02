@@ -45,7 +45,27 @@ export const config = {
   testUserId: () => optional('TEST_USER_ID', ''),
 
   /** Bill retention. The honest promise /help makes to recipients. */
-  ttlSeconds: () => Number(optional('TTL_SECONDS', String(7 * 86400))),
+  ttlSeconds: () => Number(optional('TTL_SECONDS', String(86400))),
+
+  /**
+   * Ceilings on receipts accepted for parsing, per fixed window.
+   *
+   * Every photo is a paid vision call, and anyone who can find the bot can send
+   * one, so without these a single script is an unbounded bill. They are env
+   * vars rather than constants so a limit can be raised from Terraform in the
+   * middle of an incident without a code deploy.
+   *
+   * Zero disables a tier. That is an escape hatch, not a default — the
+   * deployment ships with all three set.
+   */
+  perUserHourly: () => Number(optional('RATE_USER_HOUR', '10')),
+  perUserDaily: () => Number(optional('RATE_USER_DAY', '30')),
+  /**
+   * The one that actually bounds the bill. Per-user limits are fairness; they
+   * do nothing against twenty throwaway accounts. This is the number that says
+   * what a bad day can cost.
+   */
+  globalDaily: () => Number(optional('RATE_GLOBAL_DAY', '200')),
 } as const;
 
 /** Max age of a Mini App initData payload before we reject it. */

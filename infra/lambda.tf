@@ -53,6 +53,12 @@ resource "aws_lambda_function" "api" {
       PARSE_QUEUE_URL    = aws_sqs_queue.parse.id
       SSM_WEBHOOK_SECRET = data.aws_ssm_parameter.webhook_secret.name
       TEST_USER_ID       = var.test_user_id
+
+      # Ceilings on paid vision calls. Env vars rather than constants so a limit
+      # can be raised mid-incident with an apply instead of a code deploy.
+      RATE_USER_HOUR  = var.rate_user_hour
+      RATE_USER_DAY   = var.rate_user_day
+      RATE_GLOBAL_DAY = var.rate_global_day
     })
   }
 
@@ -76,6 +82,9 @@ resource "aws_lambda_function" "parser" {
   # Receipt images are held in memory as base64 before the API call, and more
   # memory also buys proportionally more CPU for the JSON work.
   memory_size = 1024
+
+  # Concurrency is capped on the SQS event source mapping rather than reserved
+  # here — see the scaling_config in sqs.tf for why.
 
   environment {
     variables = merge(local.common_env, {

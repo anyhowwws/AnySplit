@@ -481,3 +481,42 @@ specifically so they cannot drift from it.
 | Custom domain | Both AWS-provided hostnames carry valid certificates, which is all Telegram requires |
 | Multi-region | A bill split is not a life-critical workload |
 | DynamoDB lock table | Terraform ≥1.10 locks via S3 conditional writes |
+
+### Rate limiting
+
+Every photo is a paid vision call and anyone who can find the bot can send one,
+so the ceilings are enforced before a bill is created and before anything is
+enqueued — a refusal costs one conditional write rather than an API call.
+
+| Tier | Default | Stops |
+|---|---|---|
+| Per user, per hour | 10 | The obvious spammer, within their first minute |
+| Per user, per day | 30 | Slower grinding at the same thing |
+| **Global, per day** | **200** | Twenty throwaway accounts — the tier that actually bounds the bill |
+| SQS `maximum_concurrency` | 5 | Burst rate, and the parser starving the webhook of concurrency |
+
+Each check is a single conditional `UpdateItem`: increment, but only if the
+counter is below the ceiling. DynamoDB evaluates the condition and the increment
+as one atomic operation, so two Lambdas racing on the last remaining unit cannot
+both win — which a read-then-write would allow. Windows are fixed rather than
+sliding, so counters partition by window start and expire themselves via `ttl`;
+the cost is a brief double rate across a boundary, which is an acceptable trade
+for a ceiling that exists to stop runaway spend rather than to meter fairly.
+
+**The order of the checks is load-bearing.** They run narrowest first and stop
+at the first refusal, so a user who has exhausted their own hourly allowance
+never touches the global counter. Checked in the other order, one determined
+user would burn the day's global budget and lock out everyone else — turning a
+spend ceiling into a denial of service.
+
+The concurrency cap sits on the SQS event source rather than on the function as
+reserved concurrency. This account's Lambda limit is 10 executions in total,
+shared by both functions, and AWS rejects any reservation that would leave fewer
+than 10 unreserved. Left uncapped, a burst of receipts would take all ten and
+the webhook would begin throttling — Telegram would stop being acknowledged,
+retry, and the bot would look dead to everyone, including people not involved in
+the burst.
+
+Quota checks fail *open*: a DynamoDB outage should not stop people splitting
+bills, and the `vision-call-volume` alarm still catches a flood that slips
+through, so an outage degrades the ceiling to detection rather than removing it.

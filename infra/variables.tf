@@ -85,6 +85,55 @@ variable "alarm_email" {
   default     = ""
 }
 
+variable "rate_user_hour" {
+  description = <<-EOT
+    Receipts one person may have parsed per hour. Generous for a real meal —
+    nobody splits ten bills in an hour — and low enough that a script is stopped
+    in its first minute. Zero disables this tier.
+  EOT
+  type        = number
+  default     = 10
+}
+
+variable "rate_user_day" {
+  description = "Receipts one person may have parsed per day. Zero disables this tier."
+  type        = number
+  default     = 30
+}
+
+variable "rate_global_day" {
+  description = <<-EOT
+    Receipts anyone may have parsed per day, across every user. This is the
+    number that bounds the bill: per-user limits are fairness, and do nothing
+    against twenty throwaway accounts.
+
+    At roughly 2.6 cents a receipt, 200 is about $5.20 — the most a bad day can
+    cost before the bot politely stops. Raise it when real usage justifies it.
+  EOT
+  type        = number
+  default     = 200
+}
+
+variable "parser_max_concurrency" {
+  description = <<-EOT
+    How many parsers SQS may run at once. Bounds the rate of paid vision calls,
+    and keeps the parser from consuming the whole account concurrency pool and
+    throttling the webhook — this account's Lambda limit is 10 in total, shared
+    between both functions.
+
+    Applied to the event source mapping rather than as reserved concurrency:
+    AWS requires 10 unreserved executions account-wide, so at this limit any
+    reservation is rejected. Minimum accepted value is 2.
+  EOT
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.parser_max_concurrency >= 2
+    error_message = "SQS maximum_concurrency must be at least 2."
+  }
+}
+
 variable "vision_calls_per_hour_alarm" {
   description = <<-EOT
     Vision calls in one hour above which the cost alarm fires. Each call is a
