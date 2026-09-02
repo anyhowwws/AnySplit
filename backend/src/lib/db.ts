@@ -9,6 +9,7 @@ import type { Bill, BillStatus, Share, Unit } from '../../../shared/types.ts';
 import type { StoredPayee } from '../../../shared/payee.ts';
 import { config } from './config.ts';
 import { log } from './log.ts';
+import { userRef } from './userref.ts';
 
 const client = DynamoDBDocumentClient.from(new DynamoDBClient({}), {
   marshallOptions: { removeUndefinedValues: true },
@@ -35,8 +36,12 @@ export async function putBill(bill: Bill): Promise<void> {
 /**
  * Single GetItem. DynamoDB TTL deletion is not immediate — AWS typically
  * deletes within 48 hours of expiry — so we re-check `ttl` on read and treat an
- * expired item as absent. Two lines of code, and it makes the 7-day retention
+ * expired item as absent. Two lines of code, and it makes the 24-hour retention
  * promise honest rather than aspirational.
+ *
+ * The `ttl`-less usage rows written by recordUse are never read through here —
+ * they are keyed `usr#`, and the check below only skips items that *have* an
+ * expiry, so they would survive it regardless.
  */
 export async function getBill(billId: string): Promise<Bill | null> {
   const result = await client.send(
@@ -156,6 +161,41 @@ export async function setStatus(
       ExpressionAttributeValues: { ':st': status, ':n': note ?? null },
     }),
   );
+}
+
+/**
+ * Records that someone used the bot, so "how many people use this" is
+ * answerable without keeping anything about what they did.
+ *
+ * The key is the HMAC reference from userref.ts, never the Telegram id, so this
+ * row cannot be turned back into a person. It holds a first-seen, a last-seen
+ * and a count — no bills, no names, no merchants. Knowing that a pseudonym has
+ * split fourteen receipts says nothing about whose they were.
+ *
+ * Deliberately the only item in this table with **no** `ttl`. Everything else
+ * expires; this is a count that has to outlive what it counted. Anything added
+ * here later must stay aggregate for that reason — the moment a row carries
+ * per-bill detail it becomes the history the privacy policy says is not kept.
+ */
+export async function recordUse(userId: number | undefined): Promise<void> {
+  const ref = await userRef(userId);
+  if (!ref) return;
+
+  try {
+    await client.send(
+      new UpdateCommand({
+        TableName: config.tableName(),
+        Key: { billId: `usr#${ref}` },
+        UpdateExpression:
+          'SET firstSeen = if_not_exists(firstSeen, :now), lastSeen = :now ADD parses :one',
+        ExpressionAttributeValues: { ':now': now(), ':one': 1 },
+      }),
+    );
+  } catch (err) {
+    // Never fail a split over bookkeeping. A missed count is a worse statistic;
+    // a thrown error here would be a user who couldn't split their bill.
+    log.warn('usage record failed', { err: String(err) });
+  }
 }
 
 /**

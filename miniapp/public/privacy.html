@@ -75,7 +75,7 @@
   <body>
     <main>
       <h1>AnySplit — Privacy Policy</h1>
-      <p class="sub">Last updated 4 August 2026</p>
+      <p class="sub">Last updated 3 September 2026</p>
 
       <p>
         AnySplit is a Telegram bot that splits a restaurant bill from a photo of the receipt.
@@ -87,7 +87,9 @@
       <div class="note">
         <strong>The short version.</strong> Your receipt photo is never stored. The bill is
         deleted 24 hours after you last touch it. Phone numbers are never stored at all.
-        There are no accounts, and nothing is sold, shared or used for advertising.
+        A running count of how many people use the bot is kept against a hashed ID that
+        cannot be traced back to you. There are no accounts, and nothing is sold, shared or
+        used for advertising.
       </div>
 
       <h2>1. Who runs this</h2>
@@ -135,13 +137,24 @@
               <td>Yes</td>
               <td><strong>14 days</strong></td>
             </tr>
+            <tr>
+              <td>A usage tally — a hashed ID, when it was first and last seen, and how many receipts it has sent</td>
+              <td>Yes, indefinitely</td>
+              <td>Kept until you ask for it to be removed. It holds no bills, names, merchants or amounts</td>
+            </tr>
           </tbody>
         </table>
       </div>
       <p>
+        Your Telegram user ID is never stored as itself. Everywhere it would appear — in the logs
+        and in the usage tally — it is replaced by an irreversible keyed hash, so both can answer
+        <em>how many people use this bot</em> without being able to say who they are. The hash
+        cannot be turned back into your ID, or matched to you by anyone who obtained it.
+      </p>
+      <p>
         Logs do not contain your receipt, your item names, any phone number, or the text of your
-        messages. Your Telegram user ID appears only as an irreversible keyed hash, so the logs
-        can be used to count how many people used the bot without identifying who they were.
+        messages. The usage tally is a count and two dates; it records that a pseudonym used the
+        bot, never what it was used for.
       </p>
 
       <h2>4. Reading the receipt</h2>
@@ -173,19 +186,22 @@
         <li>Your data is never sold, rented, or shared with anyone beyond the services in section 4.</li>
         <li>No payment is taken or processed — AnySplit only tells people what they owe.</li>
         <li>No record is kept of past bills, who you eat with, or what you order.</li>
+        <li>The usage tally in section 3 counts receipts; it never records what was on them.</li>
       </ul>
 
       <h2>7. Your rights</h2>
       <p>You can ask for a copy of any personal data held about you, or ask for it to be deleted. Requests are answered within 30 days.</p>
       <p>
-        In practice there is rarely anything to send or delete: a bill is gone within 24 hours
-        of your last action on it. The only remaining trace is the operational logs described in
-        section 3, which delete themselves within 14 days and contain no identifying information
-        beyond a hashed ID.
+        In practice there is very little to send: a bill is gone within 24 hours of your last
+        action on it, and the operational logs in section 3 delete themselves within 14 days.
+        What persists is the usage tally — a hashed ID, two dates and a number. Ask and it will
+        be deleted; because it is only ever reached through that hash, removing it removes
+        everything held about you.
       </p>
       <p>
-        You can stop using AnySplit at any time by deleting the chat and blocking the bot. Nothing
-        is retained afterwards.
+        You can stop using AnySplit at any time by deleting the chat and blocking the bot. Your
+        bills and logs age out on their own; the usage tally stays until you ask for it to go,
+        so if you want nothing left behind, say so using the contact address below.
       </p>
 
       <h2>8. Contact</h2>

@@ -374,9 +374,17 @@ structurally, so it cannot quietly stop being true.
 | Phone numbers are never persisted | `StoredPayee` and `Payee` are separate types; only the former reaches the database. A type error, not a code review, catches a regression |
 | Bills disappear | DynamoDB TTL, 24h after the last action. Because AWS's TTL sweep can lag up to 48h, `ttl` is re-checked on read and expired bills are treated as absent |
 | Logs hold no receipt content | No message text, item names or image bytes are logged. For commands only the verb is recorded, so `/start <billId>` logs as `/start` |
-| User IDs are not logged raw | HMAC-SHA256, keyed with the bot token, truncated — enough to correlate a session, useless as an identifier |
+| User IDs are never stored raw | HMAC-SHA256 keyed with the bot token, truncated. Used both in logs and as the key of the usage row below, so neither store holds a recoverable identity |
+| Usage is counted, not recorded | One row per user — hash, first seen, last seen, receipt count. The only item in the table with no `ttl`, because a count has to outlive what it counted. It holds no bills, names, merchants or amounts |
 
-No accounts, no roster, no payment history. There is nothing to mine.
+No accounts, no roster of who eats with whom, no payment history. There is
+nothing to mine.
+
+The usage row is the one place where a privacy promise is a matter of
+discipline rather than structure: nothing in the schema stops a later change
+from adding per-bill detail to it, which would quietly turn a counter into the
+history this system says it does not keep. It is called out here, and in the
+comment above `recordUse`, for that reason.
 
 ### A design decision that was reversed
 

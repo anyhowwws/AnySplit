@@ -1,7 +1,7 @@
 import type { Bot, Context } from 'grammy';
 import type { Bill } from '../../../shared/types.ts';
 import { config } from './config.ts';
-import { getBill, putBill, ttlFromNow } from './db.ts';
+import { getBill, putBill, recordUse, ttlFromNow } from './db.ts';
 import {
   HELP_TEXT,
   START_TEXT,
@@ -113,6 +113,9 @@ async function handleImage(ctx: Context): Promise<void> {
       messageId: placeholder.message_id,
     });
     log.info('parse enqueued', { admin: await userRef(ctx.from.id) });
+    // Counted once the work is actually under way, so an enqueue that failed
+    // isn't recorded as somebody having used the bot.
+    await recordUse(ctx.from.id);
   } catch (err) {
     log.error('enqueue failed', errorFields(err));
     await ctx.api.editMessageText(

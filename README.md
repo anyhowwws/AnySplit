@@ -262,7 +262,13 @@ would outlive any rotation.
   Because DynamoDB TTL deletion can lag by up to 48 hours, `ttl` is re-checked on
   every read and expired bills are treated as absent, so the promise holds
   regardless of when AWS gets round to the delete.
-- No accounts, no roster, no payment history. There is nothing to mine.
+- One row per user survives: an HMAC of their Telegram id, first seen, last
+  seen, and a count of receipts. It is the only item in the table without a
+  `ttl`, because it is how "is anyone using this?" gets answered once the bills
+  it counted are gone. It carries no bills, names, merchants or amounts, and
+  the id cannot be recovered from the hash.
+- No accounts, no roster of who eats with whom, no payment history. There is
+  nothing to mine.
 
 ## Cost
 
