@@ -41,6 +41,15 @@ locals {
       msg       = "unrecoverable parse, not retrying"
       metric    = "ParseFailures"
     }
+    # A pseudonym recordUse had never seen before — see the conditional create
+    # in db.ts. Summed over a day this is "new users"; summed over the metric's
+    # whole retention (15 months) it is "total unique users", with no table
+    # scan required. Used by the daily report — see report.tf.
+    new_users = {
+      log_group = aws_cloudwatch_log_group.api.name
+      msg       = "new user"
+      metric    = "NewUsers"
+    }
 
     # ------------------------------------------------------------- security
     #

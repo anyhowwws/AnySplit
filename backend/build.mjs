@@ -13,7 +13,7 @@ const outdir = 'dist';
 await rm(outdir, { recursive: true, force: true });
 await mkdir(outdir, { recursive: true });
 
-for (const name of ['api', 'parser']) {
+for (const name of ['api', 'parser', 'report']) {
   await build({
     entryPoints: [`src/handlers/${name}.ts`],
     outfile: `${outdir}/${name}/index.mjs`,
@@ -34,4 +34,4 @@ for (const name of ['api', 'parser']) {
   });
 }
 
-console.log(`built ${outdir}/api/index.mjs and ${outdir}/parser/index.mjs`);
+console.log(`built ${outdir}/api, ${outdir}/parser and ${outdir}/report`);

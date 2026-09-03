@@ -176,24 +176,49 @@ export async function setStatus(
  * expires; this is a count that has to outlive what it counted. Anything added
  * here later must stay aggregate for that reason — the moment a row carries
  * per-bill detail it becomes the history the privacy policy says is not kept.
+ *
+ * A conditional create attempt first, exactly like claimUpdate below, so
+ * whether this pseudonym has ever been seen before is answered unambiguously
+ * by which branch runs rather than inferred from an update's side effects. The
+ * `new user` line it logs on success feeds the NewUsers metric filter in
+ * monitoring.tf, which is how the daily report counts new and total unique
+ * users without this table needing a scan.
  */
 export async function recordUse(userId: number | undefined): Promise<void> {
   const ref = await userRef(userId);
   if (!ref) return;
 
+  const key = { billId: `usr#${ref}` };
+
+  try {
+    await client.send(
+      new PutCommand({
+        TableName: config.tableName(),
+        Item: { ...key, firstSeen: now(), lastSeen: now(), parses: 0 },
+        ConditionExpression: 'attribute_not_exists(billId)',
+      }),
+    );
+    log.info('new user');
+  } catch (err) {
+    if (!(err instanceof Error && err.name === 'ConditionalCheckFailedException')) {
+      // Never fail a split over bookkeeping. A missed count is a worse
+      // statistic; a thrown error here would be a user who couldn't split
+      // their bill.
+      log.warn('usage record failed', { err: String(err) });
+      return;
+    }
+  }
+
   try {
     await client.send(
       new UpdateCommand({
         TableName: config.tableName(),
-        Key: { billId: `usr#${ref}` },
-        UpdateExpression:
-          'SET firstSeen = if_not_exists(firstSeen, :now), lastSeen = :now ADD parses :one',
+        Key: key,
+        UpdateExpression: 'SET lastSeen = :now ADD parses :one',
         ExpressionAttributeValues: { ':now': now(), ':one': 1 },
       }),
     );
   } catch (err) {
-    // Never fail a split over bookkeeping. A missed count is a worse statistic;
-    // a thrown error here would be a user who couldn't split their bill.
     log.warn('usage record failed', { err: String(err) });
   }
 }

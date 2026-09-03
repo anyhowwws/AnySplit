@@ -187,6 +187,20 @@ variable "vision_calls_per_hour_alarm" {
   default     = 50
 }
 
+variable "report_email" {
+  description = <<-EOT
+    Address that receives the daily usage digest (API calls, parses, new and
+    total unique users) — see report.tf. Empty falls back to `alarm_email`, so
+    a deployment that only ever set one address still gets the report rather
+    than a topic with nobody subscribed to it.
+
+    AWS sends a confirmation link on first apply; nothing arrives until it is
+    clicked.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "log_retention_days" {
   description = "CloudWatch log retention. Lambda's default is never-expire, which you pay for forever."
   type        = number

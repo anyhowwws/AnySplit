@@ -74,6 +74,7 @@ jobs:
     # run log; neither is confidential, but the log is world-readable.
     env:
       TF_VAR_alarm_email: ${{ secrets.ALARM_EMAIL }}
+      TF_VAR_report_email: ${{ secrets.REPORT_EMAIL }}
       TF_VAR_test_user_id: ${{ secrets.TEST_USER_ID }}
       TF_VAR_anthropic_federation_rule_id: ${{ secrets.ANTHROPIC_FEDERATION_RULE_ID }}
       TF_VAR_anthropic_service_account_id: ${{ secrets.ANTHROPIC_SERVICE_ACCOUNT_ID }}

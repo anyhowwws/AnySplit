@@ -475,6 +475,25 @@ The subscription matters as much as the alarms. `alarm_email` defaults to
 empty, and the topic will happily accept publishes with nobody subscribed,
 which looks exactly like nothing being wrong.
 
+**A daily report, built from the same metrics.** Alarms answer "is something
+wrong right now"; a separate question — API calls, parses attempted and
+succeeded, splits finalised, new users, total unique users — is answered once
+a day rather than continuously, so it is a report, not another alarm. A small
+Lambda (`report.tf`, `backend/src/handlers/report.ts`) wakes on an EventBridge
+cron, reads the usage metrics above back out of CloudWatch with
+`GetMetricData`, and mails a digest through its own SNS topic.
+
+Two things keep it from growing the bot's blast radius. It is its own Lambda
+and IAM role rather than a branch inside `api`, scoped to only
+`cloudwatch:GetMetricData` and `sns:Publish` — it cannot read a bill or touch
+the bot token even with a bug in it. And "total unique users" costs no new
+storage: `NewUsers` is a metric filter on the `new user` log line `recordUse`
+emits the first time a pseudonym's conditional create succeeds (see the
+comment above it in `db.ts`), so the daily count is `SUM(NewUsers)` over a day
+and the running total is the same sum over the metric's ~15-month retention —
+consistent with "usage is measured from logs, not stored data" above, and one
+more thing the usage table in DynamoDB does not need to be scanned to answer.
+
 ### Cost
 
 About $1–3/month of AWS, mostly inside the free tier, plus vision calls —
