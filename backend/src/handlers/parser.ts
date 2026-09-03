@@ -90,8 +90,8 @@ async function parseAndSave(
   const raw = await downloadImage(bot, { fileId: job.fileId, mediaType: job.mediaType });
 
   // Crop away the table before the model sees it — the single biggest accuracy
-  // lever measured in Phase 1, and it lowers token cost too. Falls back to the
-  // original image on any failure.
+  // lever measured, bigger than the model upgrade, and it lowers token cost
+  // too. Falls back to the original image on any failure.
   const crop = await cropToReceipt(raw);
   log.info('image preprocessed', {
     cropped: crop.cropped,

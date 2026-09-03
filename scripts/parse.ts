@@ -1,12 +1,12 @@
 /**
- * Phase 1 harness: prove the parse before building anything around it.
+ * Accuracy harness: prove the parse before building anything around it.
  *
  * Reads local receipt images, runs the same vision call the parser Lambda uses,
  * and reports whether the line items reconcile to the printed subtotal. No AWS,
  * no Telegram.
  *
  *   cd backend && npm install
- *   node --env-file=../.env --experimental-strip-types ../scripts/parse.ts ../receipts/*.jpg
+ *   node --env-file=../.env --experimental-strip-types ../scripts/parse.ts ../receipts/*.jpeg
  *
  * The bar this was built to clear: subtotal reconciles on 9 of 10 real receipts
  * without manual fixes. Collect the awkward cases too — a hawker chit with no

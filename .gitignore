@@ -23,7 +23,7 @@ backend.hcl
 *.tfplan
 crash.log
 
-# Real receipts used for Phase 1 accuracy testing. These are other people's
+# Real receipts used for parse-accuracy testing. These are other people's
 # meals — they do not belong in git.
 receipts/
 
