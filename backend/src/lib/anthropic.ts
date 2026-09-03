@@ -51,7 +51,7 @@ export function visionClient(): Promise<Anthropic> {
 
 async function build(): Promise<Anthropic> {
   // Local escape hatch, and the only reason a key still exists anywhere: the
-  // Phase 1 harness in scripts/parse.ts runs off a .env file with no AWS
+  // accuracy harness in scripts/parse.ts runs off a .env file with no AWS
   // credentials to federate with. Lambda never sets this.
   const key = process.env['ANTHROPIC_API_KEY'];
   if (key) {

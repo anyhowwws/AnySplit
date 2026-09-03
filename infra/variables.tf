@@ -6,7 +6,7 @@ variable "region" {
 
 variable "vision_model" {
   description = <<-EOT
-    Claude model used for receipt parsing. Phase 1 measured subtotal
+    Claude model used for receipt parsing. The accuracy run measured subtotal
     reconciliation over 9 real receipts: Haiku 4.5 managed 3/9 on raw phone
     photos and 5/9 cropped; Sonnet 5 managed 6/9 and 8/9. Hence Sonnet as the
     default. claude-opus-5 is a drop-in if accuracy still falls short.

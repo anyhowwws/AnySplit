@@ -251,8 +251,10 @@ resource "aws_cloudwatch_metric_alarm" "slow_acks" {
 
 # The gap the DLQ alarm cannot see. An unrecoverable parse is *handled* — the
 # bill is marked errored and the message consumed — so it never reaches the
-# DLQ. Without this, a revoked Anthropic key or a withdrawn model would fail
-# every receipt cleanly and leave both original alarms green.
+# DLQ. Without this, anything that breaks every vision call at once — a deleted
+# or edited federation rule, a disabled service account, a role rename that no
+# longer matches the rule's `sub` pin, a withdrawn model — would fail every
+# receipt cleanly and leave both original alarms green.
 #
 # Blurry photos fail too, so the threshold is set for a run of them rather than
 # a single one: over a quarter of an hour, three is a pattern.
