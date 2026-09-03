@@ -26,8 +26,8 @@ export const config = {
   miniAppUrl: () => required('MINIAPP_URL'),
 
   /**
-   * Vision model. SPEC.md started on Haiku 4.5 for cost, but the Phase 1 run
-   * over 9 real receipts came in well under the 9/10 bar:
+   * Vision model. Haiku 4.5 was the original choice on cost, but the accuracy
+   * run over 9 real receipts came in well under the 9/10 bar:
    *
    *                       original   cropped
    *   claude-haiku-4-5      3/9        5/9

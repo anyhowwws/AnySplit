@@ -69,7 +69,7 @@ jobs:
     needs: build
     # Values that live in the gitignored terraform.tfvars locally. Without them
     # CI plans against the variables' empty defaults and *removes* what a local
-    # apply configured — which is exactly how the /testing123 gate was silently
+    # apply configured — which is exactly how the /test gate was silently
     # turned off. Secrets rather than variables so they stay out of the public
     # run log; neither is confidential, but the log is world-readable.
     env:

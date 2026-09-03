@@ -2,83 +2,47 @@
 
 A Telegram bot that splits a restaurant bill from a photo of the receipt.
 
-One person photographs the receipt, assigns each item to a name, and AnySplit
-produces a per-person total with tax and service charge folded in proportionally.
-The payer forwards one message per person, or pastes a single consolidated
-message into a group chat. Each message carries the full breakdown inline — no
-links to follow.
+One person photographs the receipt and assigns each item to a name in a Telegram
+Mini App. AnySplit produces a per-person total with service charge and GST folded
+in proportionally, and sends it back either as one forwardable message per person
+or as a single consolidated message to paste into a group chat. Each message
+carries the full breakdown inline — no links to follow.
 
 Built for Singapore, where a receipt might stack 10% service charge and then 9%
 GST, or have neither — so both are read off the receipt rather than configured.
 
-**[DESIGN.md](DESIGN.md)** is the place to start if you want to understand how
-this is built and why — architecture, CI/CD, application flow, and the
-reasoning behind each decision. [SPEC.md](SPEC.md) is the original design and
-phased build plan.
+**Live.** Deployed and working end to end: photo in, per-person or group
+messages out.
 
-## Status
-
-**Live.** The bot is deployed and working end to end: photo in, per-person or
-group messages out.
-
-| Phase | State |
-|---|---|
-| 0 — Telegram setup | ✅ bot, commands, privacy policy |
-| 1 — Prove the parse | ✅ **7–8/9** on real receipts (see [SPEC.md §8](SPEC.md)) |
-| 2 — Terraform foundation | ✅ applied |
-| 3–5 — Backend, Mini App, share flow | ✅ deployed and exercised |
-| 6 — Harden | ✅ alarms, usage metrics, hashed log ids, push-to-deploy CI |
-
-Also since the original spec: receipt cropping before the vision call, a second
-validation gate on the summary arithmetic, an optional payee, group vs
-per-person delivery, and `/test` fixtures that exercise the whole flow without
-spending anything on a vision call.
-
-## Prerequisites
-
-- **Node 22+** (Node 26 in use here).
-- Terraform ≥ 1.10 (1.15 in use), and AWS credentials for a dedicated IAM user.
-  Note the `AWS_PROFILE=terraform` requirement — see [infra/README.md](infra/README.md).
-- A bot token from [@BotFather](https://t.me/BotFather).
-- An Anthropic API key **only for `scripts/parse.ts`**. The deployed bot has
-  none: the parser authenticates by workload identity federation, exchanging an
-  AWS-signed assertion of its own IAM role for a short-lived token. See
-  [DESIGN.md](DESIGN.md) § Security posture.
+This README is the operational half: how to run, deploy, and debug it.
+**[DESIGN.md](DESIGN.md)** is the other half — architecture, application flow,
+the invariants the arithmetic rests on, privacy and security posture, and the
+reasoning behind each decision. [infra/README.md](infra/README.md) covers the
+Terraform specifics: bootstrap, credentials, and the CI role.
 
 ## Layout
 
 ```
 AnySplit/
-├── shared/          types, money, and calc — imported by BOTH backend and miniapp
-├── backend/         two Lambdas: `api` (webhook + REST) and `parser` (vision)
+├── shared/          types, money, calc, payee — imported by BOTH backend and miniapp
+├── backend/         three Lambdas: `api` (webhook + REST), `parser` (vision), `report` (daily digest)
 ├── miniapp/         React + Vite + Tailwind, static, served from CloudFront
 ├── infra/           Terraform
-└── scripts/parse.ts Phase 1 harness: prove the parse before building around it
+└── scripts/parse.ts offline harness for measuring parse accuracy
 ```
 
-`shared/calc.ts` is imported by the Mini App as well as the backend on purpose.
-The Summary screen previews per-person totals using the *same* `computeShares`
-the server runs on finalise, so what the payer approves is exactly what gets
-sent. Two copies of that arithmetic would eventually disagree by a cent.
+## Prerequisites
 
-## The four invariants
-
-Everything else follows from these.
-
-1. **All money is integer cents.** No floats in the DB, the API, or the model
-   output. Formatting to dollars happens only at render time.
-2. **The grossing factor is derived, never hardcoded.** `factor = total / subtotal`,
-   applied to each person's item sum. That one line covers
-   service-charge-then-GST stacking, GST-only venues, hawker receipts with
-   neither, and flat discounts, with no branching.
-3. **Quantities are expanded into units.** `2x Beer $12.00` is stored as two rows
-   of `$6.00`, so giving one beer to each of two people needs no fraction UI.
-4. **Cents are reconciled.** After rounding each person to whole cents, the 1–2
-   cent remainder goes to the largest share, so the shares sum to exactly what
-   was paid.
-
-And one rule about people: a model proposes, the admin confirms. Every field the
-vision call produces is editable before anything is sent.
+- **Node 22+** (CI builds on 22).
+- Terraform **≥ 1.10** (CI pins 1.10.5), and AWS credentials for a dedicated IAM
+  user. Note the `AWS_PROFILE=terraform` requirement — see
+  [infra/README.md](infra/README.md#credentials) for why the default profile does
+  not work.
+- A bot token from [@BotFather](https://t.me/BotFather).
+- An Anthropic API key **only for `scripts/parse.ts`**. The deployed bot has
+  none: the parser authenticates by workload identity federation, exchanging an
+  AWS-signed assertion of its own IAM role for a short-lived token. See
+  [DESIGN.md § Security posture](DESIGN.md#security-posture).
 
 ## Deploying
 
@@ -88,39 +52,48 @@ packages, builds the Lambda bundles, applies Terraform, rebuilds the Mini App
 against the live API URL, syncs it to S3, and invalidates `index.html`. A pull
 request gets its `terraform plan` posted as a comment and applies nothing.
 
-Building the Mini App inside the same job that holds the Terraform outputs is
-deliberate. `VITE_API_BASE` is baked into the bundle at build time, and a
-locally-built bundle once shipped with it empty — an expired AWS session had
-made `terraform output` fail quietly, so every API call went same-origin and
-came back as CloudFront's SPA fallback. `vite.config.ts` now refuses to build
-without it, and CI takes the value straight from the state it just applied.
-
 There are no AWS keys in GitHub. CI assumes an IAM role through GitHub's OIDC
-provider, defined in [`infra/github_oidc.tf`](infra/github_oidc.tf) and scoped
-to two exact subjects — `main` and `pull_request`. Two repository **secrets**
-point at it:
+provider, defined in [`infra/github_oidc.tf`](infra/github_oidc.tf) and scoped to
+two exact subjects — `main` and `pull_request`.
+
+### Repository secrets
+
+Everything CI needs, all of it as **secrets** rather than variables. Most are not
+truly confidential, but this repository is public, Actions echoes a step's inputs
+into a world-readable log, a variable prints verbatim, and several of these values
+embed the AWS account id or a personal Telegram id.
+
+The three `TF_VAR_*` federation values and the two email addresses matter for a
+second reason: they live in the gitignored `infra/terraform.tfvars` locally, and
+without them CI plans against the variables' empty defaults and *removes* what a
+local apply configured.
 
 | Secret | Value |
 |---|---|
 | `AWS_ROLE_ARN` | `terraform -chdir=infra output -raw github_actions_role_arn` |
 | `TF_STATE_BUCKET` | the bucket in `infra/backend.hcl` |
+| `ALARM_EMAIL` | where CloudWatch alarms are delivered |
+| `REPORT_EMAIL` | where the daily usage digest is delivered |
+| `TEST_USER_ID` | Telegram user id allowed to run `/test`. Empty disables the command |
+| `ANTHROPIC_FEDERATION_RULE_ID` | `fdrl_…`, from Anthropic Console → Settings → Workload identity |
+| `ANTHROPIC_ORGANIZATION_ID` | Anthropic organization UUID owning that rule |
+| `ANTHROPIC_SERVICE_ACCOUNT_ID` | `svac_…`, the identity the minted token acts as |
 
-Secrets rather than variables, though neither value is really confidential:
-this repo is public, and Actions echoes a step's inputs into the log. A
-variable prints verbatim, and both values embed the AWS account id.
+`ANTHROPIC_WORKSPACE_ID` is wired through Terraform as well, but is only needed
+when the federation rule spans more than one non-default workspace.
 
 ### One-time setup
 
-CI cannot bootstrap itself — the role it assumes is created by the very
-Terraform it runs — so a new deployment starts from a terminal.
+CI cannot bootstrap itself — the role it assumes is created by the very Terraform
+it runs — so a new deployment starts from a terminal.
 
 ```bash
 # 1. Prove the parse first. It is the highest-risk part of the whole system,
 #    and everything downstream assumes it works.
 cd backend && npm install
 cp ../.env.example ../.env   # add your ANTHROPIC_API_KEY
-node --env-file=../.env --experimental-strip-types ../scripts/parse.ts ../receipts/*.jpg
-# Exit criteria: the subtotal reconciles on 9 of 10 real receipts.
+node --env-file=../.env --experimental-strip-types ../scripts/parse.ts ../receipts/*.jpeg
+# Looking for: the subtotal reconciles on ~9 of 10 real receipts.
 
 # 2. State bucket and SSM secrets — see infra/README.md for both.
 
@@ -130,12 +103,14 @@ node --env-file=../.env --experimental-strip-types ../scripts/parse.ts ../receip
 npm run build
 cd ../infra
 cp backend.hcl.example backend.hcl   # then set your state bucket name
+cp terraform.tfvars.example terraform.tfvars   # then fill in the values
 AWS_PROFILE=terraform terraform init -backend-config=backend.hcl
 AWS_PROFILE=terraform terraform apply
 
 # 4. Hand the role and bucket to GitHub, after which pushes deploy themselves.
 gh secret set AWS_ROLE_ARN --body "$(AWS_PROFILE=terraform terraform output -raw github_actions_role_arn)"
 gh secret set TF_STATE_BUCKET --body "$(grep -o '"[^"]*"' backend.hcl | tr -d '"')"
+#    ...and the six remaining secrets from the table above.
 
 # 5. Point Telegram at the webhook.
 curl -X POST "https://api.telegram.org/bot$BOT_TOKEN/setWebhook" \
@@ -156,9 +131,9 @@ numeric ids, so set `github_repo`, `github_owner_id` and `github_repo_id` in
 ### Deploying by hand
 
 Still supported, and still the only option for the two things CI deliberately
-cannot do: anything needing `dynamodb:DeleteTable` (the CI role does not have
-it — dropping the bills table should take a human at a terminal), and recovery
-when the pipeline itself is broken.
+cannot do: anything needing `dynamodb:DeleteTable` (the CI role does not have it —
+dropping the bills table should take a human at a terminal), and recovery when the
+pipeline itself is broken.
 
 ```bash
 cd backend && npm run build
@@ -174,33 +149,33 @@ aws cloudfront create-invalidation \
 
 ## Working from another machine
 
-To *deploy* from another machine you need nothing at all beyond push access —
-that is the point of the pipeline above. The list below is for working locally:
-running the parse harness, or applying Terraform by hand.
+To *deploy* from another machine you need nothing beyond push access — that is
+the point of the pipeline above. The list below is for working locally: running
+the parse harness, or applying Terraform by hand.
 
-Everything needed for that is in the repo **except five things**, all
-deliberately untracked because they hold secrets or identifiers that should not
-be in a public repo. After cloning, recreate them:
+Everything needed is in the repo **except five things**, all deliberately
+untracked because they hold secrets or identifiers that should not be in a public
+repo. After cloning, recreate them:
 
 | What | Where it comes from |
 |---|---|
 | `.env` | `cp .env.example .env`, then paste your Anthropic key. Only needed for `scripts/parse.ts` |
 | `infra/backend.hcl` | `cp backend.hcl.example backend.hcl` — the Terraform state bucket, whose name embeds the AWS account id |
-| `infra/terraform.tfvars` | `test_user_id = "<your Telegram user id>"` — gates the `/test` fixtures |
-| AWS credentials | `aws login`, plus the `terraform` profile described in [infra/README.md](infra/README.md) |
+| `infra/terraform.tfvars` | `cp terraform.tfvars.example terraform.tfvars` — the same values as the repository secrets above: alarm and report emails, the `/test` gate, and the three Anthropic federation ids |
+| AWS credentials | `aws login`, plus the `terraform` profile described in [infra/README.md](infra/README.md#credentials) |
 | `node_modules/` | `npm install` in both `backend/` and `miniapp/` |
 
 Nothing else is machine-specific. Terraform state lives in S3, so a fresh clone
 picks up the existing infrastructure on `terraform init` rather than trying to
-recreate it. The bot token, Anthropic key, and webhook secret are in SSM and are
-never on disk at all.
+recreate it. The bot token, webhook secret, and user-reference HMAC key are in
+SSM and are never on disk at all.
 
 ```bash
 git clone <your-repo-url> && cd AnySplit
 cp .env.example .env                       # add ANTHROPIC_API_KEY
 printf 'bucket = "anysplit-tfstate-%s"\n' \
   "$(aws sts get-caller-identity --query Account --output text)" > infra/backend.hcl
-printf 'test_user_id = "%s"\n' "<telegram-id>" > infra/terraform.tfvars
+cp infra/terraform.tfvars.example infra/terraform.tfvars   # then fill it in
 (cd backend && npm install) && (cd miniapp && npm install)
 AWS_PROFILE=terraform terraform -chdir=infra init -backend-config=backend.hcl
 ```
@@ -229,58 +204,38 @@ The lines worth knowing:
 | `duplicate update dropped` | Telegram redelivered. **Without a matching `update handled`, the first attempt is failing and the retry is being suppressed on top of it** — that combination is what a dead bot looks like |
 | `update handled but over telegram ack budget` | slower than ~2.5s; Telegram is about to redeliver |
 | `telegram api ok` / `rejected` / `transport failed` | one line per Telegram call. `rejected` = Telegram said no; `transport failed` = the request never left the process |
+| `rate limited` | a quota tier refused a receipt before any spend; `scope` says which |
 | `image preprocessed` | `cropped` and `keptFraction`. `cropped:false` means the crop bailed and accuracy will be lower |
 | `vision call complete` | `inputTokens` scales with image area — a jump usually means cropping stopped working, not longer receipts |
 | `receipt parsed` | `reconciled:false` means items don't match the printed subtotal |
 
-**Two deliberate omissions.** No message text, item names, or image bytes are
-ever logged — a log line is storage, and AnySplit promises receipts aren't
-stored. For commands only the verb is recorded, so `/start <billId>` logs as
-`/start`. Separately, bot tokens are scrubbed from every line: HTTP clients quote
-the URL they failed on, Telegram URLs embed the token, and a token in CloudWatch
-would outlive any rotation.
+**Two deliberate omissions.** No message text, item names, or image bytes are ever
+logged — a log line is storage, and AnySplit promises receipts aren't stored. For
+commands only the verb is recorded, so `/start <billId>` logs as `/start`.
+Separately, bot tokens are scrubbed from every line: HTTP clients quote the URL
+they failed on, Telegram URLs embed the token, and a token in CloudWatch would
+outlive any rotation.
 
-## Security posture
+Seven CloudWatch alarms and a daily usage digest cover what the logs alone would
+not; [DESIGN.md § Observability](DESIGN.md#observability) explains what each one
+is there to catch.
 
-- **Webhook authentication.** `setWebhook` registers a `secret_token`, which
-  Telegram then sends as `X-Telegram-Bot-Api-Secret-Token`. Requests without a
-  matching header are rejected — otherwise anyone who discovers the API Gateway
-  URL can inject fake updates.
-- **initData verification.** Every Mini App request carries Telegram's signed
-  `initData`; the backend recomputes the HMAC and rejects payloads older than
-  three hours. A `user_id` from a request body is never trusted.
-- **Admin-only mutation.** Only the payer who sent the photo can read or modify a
-  bill. Recipients see their share through the bot, not the API.
-- **Unguessable bill ids.** 72 bits of entropy, because the deep link is the only
-  access control on a share.
-- **Secrets never enter Terraform state.** Terraform passes SSM parameter
-  *paths*; Lambda resolves the values at runtime.
+### `/test` — exercising the flow without paying for a vision call
 
-## Privacy
-
-- Receipt photos are streamed from Telegram straight into the vision call. They
-  are never written to disk or S3.
-- Bill data auto-purges 24 hours after the last action on it — sending refreshes
-  the clock rather than ending it, so a split can still be corrected or re-sent.
-  Because DynamoDB TTL deletion can lag by up to 48 hours, `ttl` is re-checked on
-  every read and expired bills are treated as absent, so the promise holds
-  regardless of when AWS gets round to the delete.
-- One row per user survives: an HMAC of their Telegram id, first seen, last
-  seen, and a count of receipts. It is the only item in the table without a
-  `ttl`, because it is how "is anyone using this?" gets answered once the bills
-  it counted are gone. It carries no bills, names, merchants or amounts, and
-  the id cannot be recovered from the hash.
-- No accounts, no roster of who eats with whom, no payment history. There is
-  nothing to mine.
+`/test` runs seven canned receipts through the real `deriveBill()` logic — the
+whole flow, including the validation failure paths, with only the model call
+skipped. It is gated to the single Telegram id in `TEST_USER_ID`, and an empty
+setting disables it, so an unconfigured deployment fails closed. Send `/test` with
+no argument for the menu.
 
 ## Cost
 
-$1–3/month, mostly inside the free tier, plus vision API calls (a few dollars at
-personal volume).
+$1–3/month of AWS, mostly inside the free tier, plus vision calls — roughly
+$26–31 per thousand receipts at Sonnet 5 standard pricing.
 
 ## Licence
 
-**All rights reserved.** This repository is public so the design and the code
-can be read — see [DESIGN.md](DESIGN.md) — not so they can be reused. No licence
-to use, run, copy, modify or distribute is granted; see [LICENSE](LICENSE).
-Ask by opening an issue if you want to.
+**All rights reserved.** This repository is public so the design and the code can
+be read — see [DESIGN.md](DESIGN.md) — not so they can be reused. No licence to
+use, run, copy, modify or distribute is granted; see [LICENSE](LICENSE). Ask by
+opening an issue if you want to.

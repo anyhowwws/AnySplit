@@ -8,7 +8,7 @@
  *   cd backend && npm install
  *   node --env-file=../.env --experimental-strip-types ../scripts/parse.ts ../receipts/*.jpg
  *
- * Exit criteria from SPEC.md: subtotal reconciles on 9 of 10 real receipts
+ * The bar this was built to clear: subtotal reconciles on 9 of 10 real receipts
  * without manual fixes. Collect the awkward cases too — a hawker chit with no
  * tax lines, Chinese item names, a discount line, 30+ items, one crumpled.
  */

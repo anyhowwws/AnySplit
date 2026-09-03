@@ -2,7 +2,8 @@ import { randomBytes } from 'node:crypto';
 
 /**
  * 12-char base64url bill id. 72 bits of entropy — bill ids are unguessable,
- * which matters because the deep link is the only access control on a share.
+ * which matters because the id is the Mini App's only handle on a bill, and
+ * knowing one is the only way to ask the API for a bill that isn't yours.
  */
 export function newBillId(): string {
   return randomBytes(9).toString('base64url'); // 9 bytes -> exactly 12 chars

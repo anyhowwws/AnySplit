@@ -11,8 +11,10 @@ consolidated message to paste into a group chat.
 Built for Singapore, where a bill might stack 10% service charge and then 9%
 GST, or have neither. Both are read off the receipt rather than configured.
 
-This document is the design rationale. [README.md](README.md) covers running
-and deploying it.
+This document is the design rationale: how AnySplit is put together and why
+each decision went the way it did. [README.md](README.md) is the operational
+counterpart — running, deploying, and debugging it — and
+[infra/README.md](infra/README.md) covers the Terraform specifics.
 
 ---
 
@@ -34,6 +36,9 @@ flowchart TB
         DDB[("DynamoDB<br/>single table, TTL")]
         SSM["SSM Parameter Store<br/>SecureString"]
         CW["CloudWatch<br/>logs, metrics, alarms"]
+        CRON["EventBridge<br/>daily cron"]
+        REPORT["Lambda: report<br/>usage digest"]
+        SNS["SNS<br/>alarms + reports"]
     end
 
     ANTHROPIC["Anthropic API<br/>Claude Sonnet 5 vision"]
@@ -54,6 +59,10 @@ flowchart TB
     API --> TGAPI
     PARSER --> TGAPI
     API & PARSER --> CW
+    CW --> SNS
+    CRON --> REPORT
+    REPORT -->|"GetMetricData"| CW
+    REPORT --> SNS
 ```
 
 ### What is infrastructure, what is application code
@@ -65,6 +74,7 @@ the two bootstrap items noted at the bottom.
 |---|---|---|
 | Lambda `anysplit-api` | `lambda.tf` | Telegram webhook + REST API for the Mini App |
 | Lambda `anysplit-parser` | `lambda.tf` | SQS consumer; calls the vision model |
+| Lambda `anysplit-report` | `report.tf` | EventBridge cron; mails the daily usage digest |
 | API Gateway HTTP API | `apigw.tf` | `ANY /{proxy+}`, `$default` stage, CORS |
 | DynamoDB `anysplit-bills` | `dynamodb.tf` | Single table, TTL enabled |
 | SQS `parse-queue` + DLQ | `sqs.tf` | Decouples the slow vision call from the webhook |
@@ -77,7 +87,7 @@ the two bootstrap items noted at the bottom.
 | Application code | Language | Role |
 |---|---|---|
 | `shared/` | TypeScript | Types, money, calc, payee — imported by **both** backend and Mini App |
-| `backend/src/handlers/` | TypeScript | Two Lambda entrypoints: `api`, `parser` |
+| `backend/src/handlers/` | TypeScript | Three Lambda entrypoints: `api`, `parser`, `report` |
 | `backend/src/lib/` | TypeScript | Bot, vision, preprocessing, DB, formatting, logging, auth |
 | `miniapp/src/` | React + Vite + Tailwind | Four-screen Mini App, static build |
 | `scripts/parse.ts` | TypeScript | Offline harness for measuring parse accuracy |
@@ -102,8 +112,8 @@ runs on finalise, so what the payer approves is exactly what gets sent. Two
 copies of that arithmetic would eventually disagree by a cent, and the bug
 would surface as an accusation between friends.
 
-**arm64 across both functions.** Cheaper per millisecond, and nothing in the
-dependency tree is native.
+**arm64 across all three functions.** Cheaper per millisecond, and nothing in
+the dependency tree is native.
 
 **No custom domain.** CloudFront's `*.cloudfront.net` and API Gateway's
 `*.execute-api.*` both carry valid certificates, which is all Telegram
@@ -119,9 +129,9 @@ by design rather than by omission.
 ```
 AnySplit/
 ├── shared/               types, money, calc — imported by BOTH sides
-├── backend/              two Lambda bundles, built with esbuild
-│   ├── src/handlers/     api.ts, parser.ts — the two entrypoints
-│   └── src/lib/          bot, vision, preprocess, db, format, log, auth
+├── backend/              three Lambda bundles, built with esbuild
+│   ├── src/handlers/     api.ts, parser.ts, report.ts — the entrypoints
+│   └── src/lib/          bot, vision, preprocess, db, ratelimit, format, log, auth
 ├── miniapp/              React + Vite + Tailwind, static
 ├── infra/                Terraform, one file per concern
 ├── scripts/parse.ts      accuracy harness
@@ -251,7 +261,7 @@ sequenceDiagram
     P->>C: vision call, forced tool use
     C-->>P: structured line items
     P->>P: validate — two independent gates
-    P->>DB: store units (status: ready)
+    P->>DB: store units (status: review)
     P->>TG: edit message → summary + "Review & split"
 
     U->>MA: taps button, Mini App opens
@@ -271,13 +281,13 @@ sequenceDiagram
 ```mermaid
 stateDiagram-v2
     [*] --> parsing: photo received
-    parsing --> ready: parsed and validated
+    parsing --> review: parsed and validated
     parsing --> error: unreadable
-    ready --> final: shares sent
+    review --> final: shares sent
     final --> final: re-edited and re-sent
     final --> [*]: TTL, 24h after last action
     error --> [*]: TTL
-    ready --> [*]: TTL (abandoned)
+    review --> [*]: TTL (abandoned)
 ```
 
 ### The four screens
@@ -303,6 +313,36 @@ stateDiagram-v2
 `OPTIONS /*` is explicit because API Gateway's `ANY /{proxy+}` route swallows
 preflights and hands them to the application, which otherwise answers 404 and
 the browser reports it as an opaque CORS failure.
+
+### Data model
+
+One DynamoDB table, no sort key, no GSI. Every bill read is a single `GetItem`.
+The authoritative shape is [`shared/types.ts`](shared/types.ts); what matters
+architecturally is which fields are derived and which are decoration.
+
+| Field | Note |
+|---|---|
+| `billId` | Partition key. 12-char base64url |
+| `adminId` | Telegram id of the payer. The only user allowed to read or mutate the bill |
+| `subtotal` | The sum of `units` — **not** the receipt's printed subtotal |
+| `total` | What was actually paid, in cents |
+| `factor` | `total / subtotal`. The only non-integer in the item, because it is a ratio, not money |
+| `units` | Quantities already expanded, one row per unit |
+| `shares` | Populated on finalise, and rewritten on every re-finalise |
+| `ttl` | Epoch seconds. Re-checked on read |
+| `serviceCharge`, `gst`, `discount` | As printed. **Display only** — no calculation reads them |
+| `note` | Parse warning or error, surfaced in the Mini App |
+
+`subtotal` being the sum of units rather than the printed figure is the
+load-bearing choice: `factor` has to be relative to what actually gets divided
+up, or the shares will not add to the total. When the two disagree the parse still
+lands, `note` says so, and the payer reconciles it in the Review screen.
+
+Two other item shapes share the table rather than earning tables of their own:
+`upd#<update_id>`, written conditionally with a one-hour `ttl` to dedupe
+Telegram's webhook retries, and the rate-limit counters described below, keyed
+by window start so they expire themselves. A second table for either would be
+pure ceremony.
 
 ---
 
@@ -351,6 +391,18 @@ accuracy *and* reduces cost, since image tokens scale with area. The crop uses
 a hysteresis threshold (seed on confident bright pixels, grow into connected
 dimmer ones) after a single fixed threshold was found to be truncating
 receipts whose totals block fell into shadow.
+
+**Rotation, by contrast, is a red herring.** Correcting EXIF orientation alone
+changed nothing — 3/9 either way — so there is deliberately no deskew logic.
+Jimp applies the EXIF tag on read, and that turned out to be sufficient.
+
+Two caveats worth carrying: `temperature` is deprecated on Sonnet 5 and later
+and returns a 400, so the run cannot be pinned down and marginal receipts vary
+between runs; and n=9 is a small sample, not meaningfully distinguishable from
+the 9/10 target it was measured against. The one consistent failure is a
+receipt whose thermal print has faded to where `$10.00` and `$70.00` are
+genuinely ambiguous to a careful human — which no model or preprocessing fixes,
+and which is precisely what the Review screen exists for.
 
 **Structured output is forced**, via a tool schema with `strict: true`, rather
 than parsed out of prose.
@@ -414,7 +466,9 @@ mistakes.
   three hours. A `user_id` from a request body is never trusted.
 - **Admin-only mutation.** Only the payer who sent the photo can read or modify
   a bill. Recipients receive their share through the bot, never the API.
-- **Unguessable bill IDs.** 72 bits of entropy.
+- **Unguessable bill IDs.** 72 bits of entropy. The id is the Mini App's handle
+  on a bill, so guessing one is the only way to reach a bill that is not yours —
+  and `bill-access-denied` alarms on the attempt.
 - **Secrets never enter Terraform state.** Terraform is given SSM parameter
   *paths*; Lambda resolves the values at runtime. Passing a value into a Lambda
   environment block would write plaintext into `terraform.tfstate` — the same
@@ -452,7 +506,9 @@ A few log lines are load-bearing. `duplicate update dropped` **without** a
 matching `update handled` is what a dead bot looks like — Telegram retrying
 while the first attempt keeps failing. `vision call complete` carries
 `inputTokens`, which scales with image area, so a jump means cropping stopped
-working rather than that receipts got longer.
+working rather than that receipts got longer. The full list of what each line
+means, and the queries to pull them, is in
+[README.md § Debugging](README.md#debugging).
 
 Seven alarms, all publishing to one SNS topic. Three of them exist because a
 log line nobody queries is not a detection:
@@ -501,7 +557,7 @@ roughly $26–31 per thousand receipts at Sonnet 5 standard pricing. Input
 dominates at ~92%, almost all of it image tokens, which is the second reason
 cropping earns its place.
 
-`/testing123` runs seven canned fixtures through the real `deriveBill()` logic,
+`/test` runs seven canned fixtures through the real `deriveBill()` logic,
 exercising the entire flow — including validation failure paths — without
 spending anything on a vision call. The fixtures share the production code path
 specifically so they cannot drift from it.
@@ -516,6 +572,9 @@ specifically so they cannot drift from it.
 | Custom domain | Both AWS-provided hostnames carry valid certificates, which is all Telegram requires |
 | Multi-region | A bill split is not a life-critical workload |
 | DynamoDB lock table | Terraform ≥1.10 locks via S3 conditional writes |
+| Simultaneous claiming | Everyone claiming their own items in parallel is a nicer story and a much harder one. One person assigning is enough, and it keeps the whole bill under a single authority |
+| Voice assignment | "Marcus had the ribeye and two beers" is the best version of this product. It needs the rest of it to work first |
+| PayNow QR | High value, and the point at which a bill splitter starts to look like it moves money. Deliberately deferred rather than dismissed |
 
 ### Rate limiting
 
