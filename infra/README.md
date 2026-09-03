@@ -30,6 +30,13 @@ directory therefore needs `-backend-config=backend.hcl`.
 State locking uses S3 conditional writes (`use_lockfile = true`, Terraform ≥1.10),
 so there is no DynamoDB lock table to create.
 
+`terraform.tfvars` is gitignored for the same reason — it holds account and
+personal identifiers rather than secrets, but this repository is public. Copy
+`terraform.tfvars.example` and fill it in. CI passes the same values as
+`TF_VAR_*` repository secrets, and they have to be set in both places: without
+them a CI plan falls back to the variables' empty defaults and *removes* what a
+local apply configured.
+
 ## Secrets
 
 Secrets are **never** passed through Terraform. Create them once with the CLI;
@@ -174,6 +181,7 @@ aws iam simulate-principal-policy \
 | `s3.tf` | private Mini App bucket, OAC-only policy |
 | `cloudfront.tf` | distribution with SPA error mapping |
 | `monitoring.tf` | SNS topic, metric filters, seven alarms |
+| `report.tf` | daily usage digest: its own Lambda, role, EventBridge cron, SNS topic |
 | `outputs.tf` | URLs and names the deploy steps need |
 
 ## Notes

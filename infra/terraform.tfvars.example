@@ -1,0 +1,34 @@
+# Copy to terraform.tfvars (gitignored) and fill in, then:
+#
+#   AWS_PROFILE=terraform terraform apply
+#
+# None of these are secrets, but all of them are account or personal
+# identifiers, and this repository is public. CI supplies the same values as
+# TF_VAR_* repository secrets — see the secrets table in ../README.md. They must
+# be set in both places: CI plans against these variables' empty defaults
+# otherwise, and *removes* what a local apply configured.
+
+# Telegram user id allowed to run /test. Empty disables the command outright,
+# so an unconfigured deployment fails closed rather than handing the fixtures
+# to everyone.
+test_user_id = "<your-telegram-user-id>"
+
+# Creates the SNS email subscription for alarms. AWS sends a confirmation link
+# first; nothing is delivered until it is clicked. Leave empty to manage the
+# subscription by hand in the console instead.
+# alarm_email = "you@example.com"
+
+# Where the daily usage digest goes. Falls back to alarm_email when empty, so a
+# deployment that only ever set one address doesn't end up with a topic nobody
+# is subscribed to.
+# report_email = "you@example.com"
+
+# Workload identity federation — the parser authenticates with no API key at
+# all. From the Anthropic Console, Settings -> Workload identity.
+anthropic_federation_rule_id = "fdrl_..."
+anthropic_service_account_id = "svac_..."
+anthropic_organization_id    = "<organization-uuid>"
+
+# Only needed when the federation rule covers more than one non-default
+# workspace. Left empty, the server infers it.
+# anthropic_workspace_id = "wrkspc_..."
