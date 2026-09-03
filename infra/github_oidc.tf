@@ -150,15 +150,6 @@ data "aws_iam_policy_document" "github_actions" {
     resources = ["*"]
   }
 
-  # ---------------------------------------------------------------- secrets
-  # Same indirection the Lambdas use: read the parameter, never write it.
-  statement {
-    sid       = "ReadSecrets"
-    effect    = "Allow"
-    actions   = ["ssm:GetParameter", "ssm:GetParameters"]
-    resources = ["arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/${local.name}/*"]
-  }
-
   # ---------------------------------------------------------------- compute
   statement {
     sid    = "ManageFunctions"
