@@ -97,8 +97,16 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          # Keeps the account id out of the public log if anything prints it.
+          # Keeps the account id out of the *console* log if anything prints it.
+          # Log masking only, though: it does nothing for a value a later step
+          # reads into a script and ships out over the network rather than
+          # printing — see the redaction below, added after exactly that leaked
+          # the account id into a public PR comment.
           mask-aws-account-id: true
+
+      - name: account id
+        id: account
+        run: echo "id=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -118,9 +126,17 @@ jobs:
         uses: actions/github-script@v7
         env:
           PLAN: ${{ steps.plan.outputs.stdout }}
+          ACCOUNT_ID: ${{ steps.account.outputs.id }}
         with:
+          # createComment posts straight to the GitHub API, bypassing the
+          # runner's log-masking entirely — that only redacts text as it's
+          # printed to the job's own log. So the account id embedded in every
+          # refreshed resource's ARN has to be stripped here by hand, or it
+          # lands unmasked in a public, permanent PR comment.
           script: |
-            const plan = (process.env.PLAN || '').slice(0, 60000);
+            let plan = (process.env.PLAN || '').slice(0, 60000);
+            const accountId = process.env.ACCOUNT_ID;
+            if (accountId) plan = plan.split(accountId).join('<account-id>');
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
