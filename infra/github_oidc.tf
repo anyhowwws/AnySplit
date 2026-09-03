@@ -123,6 +123,9 @@ data "aws_iam_policy_document" "github_actions" {
       "cloudwatch:Describe*",
       "cloudwatch:Get*",
       "cloudwatch:List*",
+      "events:DescribeRule",
+      "events:ListTargetsByRule",
+      "events:ListTagsForResource",
       "dynamodb:Describe*",
       "dynamodb:ListTagsOfResource",
       "iam:Get*",
@@ -327,6 +330,22 @@ data "aws_iam_policy_document" "github_actions" {
       "logs:DeleteMetricFilter",
     ]
     resources = ["arn:aws:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${local.name}-*"]
+  }
+
+  # The report Lambda's cron trigger — see report.tf. Scoped to the same name
+  # prefix as everything else, the way EventBridge rule ARNs allow.
+  statement {
+    sid    = "ManageEventBridge"
+    effect = "Allow"
+    actions = [
+      "events:PutRule",
+      "events:DeleteRule",
+      "events:PutTargets",
+      "events:RemoveTargets",
+      "events:TagResource",
+      "events:UntagResource",
+    ]
+    resources = ["arn:aws:events:${var.region}:${data.aws_caller_identity.current.account_id}:rule/${local.name}-*"]
   }
 
   statement {
