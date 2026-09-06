@@ -42,9 +42,11 @@ locals {
       metric    = "ParseFailures"
     }
     # A pseudonym recordUse had never seen before — see the conditional create
-    # in db.ts. Summed over a day this is "new users"; summed over the metric's
-    # whole retention (15 months) it is "total unique users", with no table
-    # scan required. Used by the daily report — see report.tf.
+    # in db.ts. Summed over a day this is "new users", which is what the daily
+    # report uses it for. It is NOT the running total: this metric began at zero
+    # when Terraform first created the filter and cannot see a `new user` line
+    # logged before that, so anyone who signed up earlier is invisible to it.
+    # The total is counted in the table instead — see lib/usercount.ts.
     new_users = {
       log_group = aws_cloudwatch_log_group.api.name
       msg       = "new user"
