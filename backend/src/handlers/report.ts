@@ -103,16 +103,16 @@ export async function handler(): Promise<void> {
       readUserCount(),
     ]);
 
-    // Sentence case throughout, and padded here rather than by hand so a label
-    // can be reworded without re-aligning the whole block.
+    // Title Case throughout, and padded here rather than by hand so a label can
+    // be reworded without re-aligning the whole block.
     const rows: [string, number][] = [
-      ['Receipts submitted', receiptsSubmitted],
-      ['Vision calls', visionCalls],
-      ['Receipts parsed', receiptsParsed],
-      ['Parse failures', parseFailures],
-      ['Splits finalised', splitsFinalised],
-      ['New users today', newUsers],
-      ['Total unique users', totalUsers],
+      ['Receipts Submitted', receiptsSubmitted],
+      ['Vision Calls', visionCalls],
+      ['Receipts Parsed', receiptsParsed],
+      ['Parse Failures', parseFailures],
+      ['Splits Finalised', splitsFinalised],
+      ['New Users Today', newUsers],
+      ['Total Unique Users', totalUsers],
     ];
     const width = Math.max(...rows.map(([label]) => label.length)) + 2;
 
