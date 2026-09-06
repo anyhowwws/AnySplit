@@ -4,9 +4,15 @@ import { errorFields, log } from '../lib/log.ts';
 import { readUserCount } from '../lib/usercount.ts';
 
 /**
- * EventBridge-triggered, once a day. Reads counts back out of the metrics
- * monitoring.tf already derives from the structured logs — no new storage —
- * and mails a short digest through SNS.
+ * EventBridge-triggered, once a day at 22:00 Singapore time. Reads counts back
+ * out of the metrics monitoring.tf already derives from the structured logs —
+ * no new storage — and mails a short digest through SNS.
+ *
+ * The digest is a funnel, in the order a receipt travels: submitted, sent to
+ * the model, read, failed, split. Read top to bottom, the gaps between adjacent
+ * lines are where people are dropping out, which is the question the report
+ * exists to answer. Every line is a count of events in the last 24 hours except
+ * the last, which is cumulative.
  *
  * Nothing here can read a bill or touch the bot token. Beyond
  * cloudwatch:GetMetricData and sns:Publish it holds exactly one DynamoDB
@@ -24,6 +30,18 @@ const cloudwatch = new CloudWatchClient({});
 const sns = new SNSClient({});
 
 const ANYSPLIT = 'AnySplit';
+
+/**
+ * Singapore time, as a plain YYYY-MM-DD.
+ *
+ * SGT is a fixed UTC+8 with no daylight saving, so shifting the instant and
+ * reading the UTC date off it is exact — and needs no timezone database in the
+ * bundle. The report is a Singapore artefact for a Singapore bot; a UTC date on
+ * it was only ever an implementation detail leaking into someone's inbox.
+ */
+function singaporeDate(at: Date): string {
+  return new Date(at.getTime() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+}
 
 function required(name: string): string {
   const value = process.env[name];
@@ -62,32 +80,47 @@ async function sumMetric(
 
 export async function handler(): Promise<void> {
   const topicArn = required('REPORTS_TOPIC_ARN');
-  const httpApiId = required('HTTP_API_ID');
 
   const end = new Date();
   const dayStart = new Date(end.getTime() - 24 * 3600 * 1000);
 
   try {
-    const [apiCalls, visionCalls, receiptsParsed, billsFinalised, newUsers, totalUsers] =
-      await Promise.all([
-        sumMetric('AWS/ApiGateway', 'Count', [{ Name: 'ApiId', Value: httpApiId }], dayStart, end),
-        sumMetric(ANYSPLIT, 'VisionCalls', [], dayStart, end),
-        sumMetric(ANYSPLIT, 'ReceiptsParsed', [], dayStart, end),
-        sumMetric(ANYSPLIT, 'BillsFinalised', [], dayStart, end),
-        sumMetric(ANYSPLIT, 'NewUsers', [], dayStart, end),
-        readUserCount(),
-      ]);
+    const [
+      receiptsSubmitted,
+      visionCalls,
+      receiptsParsed,
+      parseFailures,
+      splitsFinalised,
+      newUsers,
+      totalUsers,
+    ] = await Promise.all([
+      sumMetric(ANYSPLIT, 'BillsStarted', [], dayStart, end),
+      sumMetric(ANYSPLIT, 'VisionCalls', [], dayStart, end),
+      sumMetric(ANYSPLIT, 'ReceiptsParsed', [], dayStart, end),
+      sumMetric(ANYSPLIT, 'ParseFailures', [], dayStart, end),
+      sumMetric(ANYSPLIT, 'BillsFinalised', [], dayStart, end),
+      sumMetric(ANYSPLIT, 'NewUsers', [], dayStart, end),
+      readUserCount(),
+    ]);
 
-    const dateLabel = end.toISOString().slice(0, 10);
+    // Sentence case throughout, and padded here rather than by hand so a label
+    // can be reworded without re-aligning the whole block.
+    const rows: [string, number][] = [
+      ['Receipts submitted', receiptsSubmitted],
+      ['Vision calls', visionCalls],
+      ['Receipts parsed', receiptsParsed],
+      ['Parse failures', parseFailures],
+      ['Splits finalised', splitsFinalised],
+      ['New users today', newUsers],
+      ['Total unique users', totalUsers],
+    ];
+    const width = Math.max(...rows.map(([label]) => label.length)) + 2;
+
+    const dateLabel = singaporeDate(end);
     const message = [
-      `AnySplit — daily report for ${dateLabel} (last 24h, UTC)`,
+      `AnySplit — daily report for ${dateLabel} (last 24 hours)`,
       '',
-      `API calls:          ${apiCalls}`,
-      `Parses attempted:   ${visionCalls}`,
-      `Parses succeeded:   ${receiptsParsed}`,
-      `Splits finalised:   ${billsFinalised}`,
-      `New users:          ${newUsers}`,
-      `Total unique users: ${totalUsers}`,
+      ...rows.map(([label, value]) => `${`${label}:`.padEnd(width)}${value}`),
     ].join('\n');
 
     await sns.send(
@@ -98,7 +131,15 @@ export async function handler(): Promise<void> {
       }),
     );
 
-    log.info('daily report sent', { apiCalls, visionCalls, receiptsParsed, billsFinalised, newUsers, totalUsers });
+    log.info('daily report sent', {
+      receiptsSubmitted,
+      visionCalls,
+      receiptsParsed,
+      parseFailures,
+      splitsFinalised,
+      newUsers,
+      totalUsers,
+    });
   } catch (err) {
     log.error('daily report failed', errorFields(err));
     throw err;
