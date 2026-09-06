@@ -86,8 +86,11 @@ locals {
       metric    = "SlowAcks"
     }
 
-    # Every vision call, successful or not. ReceiptsParsed counts only the ones
-    # that produced items; this one counts the ones that cost money.
+    # Logged after the model returns, so this counts vision calls that came
+    # back — not calls attempted. One that throws (timeout, 429, 5xx) never
+    # reaches the line and is invisible here; ParseFailures is where those
+    # surface. Retries count again, so this is calls, not receipts: it is the
+    # spend number, and BillsStarted is the receipt number.
     vision_calls = {
       log_group = aws_cloudwatch_log_group.parser.name
       msg       = "vision call complete"

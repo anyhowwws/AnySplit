@@ -189,8 +189,8 @@ variable "vision_calls_per_hour_alarm" {
 
 variable "report_email" {
   description = <<-EOT
-    Address that receives the daily usage digest (API calls, parses, new and
-    total unique users) — see report.tf. Empty falls back to `alarm_email`, so
+    Address that receives the daily usage digest (the receipt funnel, new users
+    today, total unique users) — see report.tf. Empty falls back to `alarm_email`, so
     a deployment that only ever set one address still gets the report rather
     than a topic with nobody subscribed to it.
 

@@ -1,6 +1,6 @@
 # --------------------------------------------------------------------
-# Daily usage report: API calls, parses attempted/succeeded, splits
-# finalised, new users, total unique users.
+# Daily usage report, as a funnel: receipts submitted, vision calls, receipts
+# parsed, parse failures, splits finalised, new users today, total unique users.
 #
 # The daily numbers come from the metrics monitoring.tf derives from the
 # structured logs. "Total unique users" does not: a metric filter starts at zero
@@ -118,7 +118,7 @@ resource "aws_lambda_function" "report" {
   filename         = data.archive_file.report.output_path
   source_code_hash = data.archive_file.report.output_base64sha256
 
-  # Five GetMetricData calls, one GetItem and one Publish; generous headroom
+  # Six GetMetricData calls, one GetItem and one Publish; generous headroom
   # over tight.
   timeout     = 30
   memory_size = 256
@@ -126,7 +126,6 @@ resource "aws_lambda_function" "report" {
   environment {
     variables = {
       REPORTS_TOPIC_ARN = aws_sns_topic.reports.arn
-      HTTP_API_ID       = aws_apigatewayv2_api.http.id
       BILLS_TABLE       = aws_dynamodb_table.bills.name
     }
   }
@@ -134,11 +133,14 @@ resource "aws_lambda_function" "report" {
   depends_on = [aws_cloudwatch_log_group.report]
 }
 
-# Fires once a day. 01:00 UTC is 09:00 in Singapore, the timezone this bot is
-# built for — see DESIGN.md.
+# Fires once a day at 22:00 Singapore time — 14:00 UTC, since SGT is a fixed
+# UTC+8 with no daylight saving to track. EventBridge cron is UTC-only, which is
+# the only reason UTC appears anywhere near this report; the digest itself is
+# written in Singapore time. Evening rather than morning so the number covers
+# the day people actually split bills on, dinner included.
 resource "aws_cloudwatch_event_rule" "report_daily" {
   name                = "${local.name}-report-daily"
-  schedule_expression = "cron(0 1 * * ? *)"
+  schedule_expression = "cron(0 14 * * ? *)"
 }
 
 resource "aws_cloudwatch_event_target" "report_daily" {

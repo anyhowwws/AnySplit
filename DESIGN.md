@@ -532,12 +532,23 @@ empty, and the topic will happily accept publishes with nobody subscribed,
 which looks exactly like nothing being wrong.
 
 **A daily report, built from the same metrics.** Alarms answer "is something
-wrong right now"; a separate question — API calls, parses attempted and
-succeeded, splits finalised, new users, total unique users — is answered once
-a day rather than continuously, so it is a report, not another alarm. A small
-Lambda (`report.tf`, `backend/src/handlers/report.ts`) wakes on an EventBridge
-cron, reads the usage metrics above back out of CloudWatch with
+wrong right now"; a separate question — how far did receipts get today, and how
+many people — is answered once a day rather than continuously, so it is a
+report, not another alarm. A small Lambda (`report.tf`,
+`backend/src/handlers/report.ts`) wakes on an EventBridge cron at 22:00
+Singapore time, reads the usage metrics above back out of CloudWatch with
 `GetMetricData`, and mails a digest through its own SNS topic.
+
+The digest is a funnel, in the order a receipt travels — submitted, sent to the
+model, read, failed, split — because the useful information is in the gaps
+between adjacent lines rather than in any single number. `BillsStarted` is the
+receipt count, one per photo accepted; `VisionCalls` is the spend count, which
+counts retries again and so is deliberately not the same number. It carried an
+`API calls` line for a while, taken from the API Gateway's `Count`. That route
+is `ANY /{proxy+}`, so it summed Telegram webhook deliveries, every Mini App
+REST call, and any scanner that found the URL into one figure that moved with UI
+chattiness rather than with anybody splitting a bill. It is a reasonable thing
+to alarm on and a poor thing to report.
 
 It is its own Lambda and IAM role rather than a branch inside `api`, scoped to
 `cloudwatch:GetMetricData`, `sns:Publish`, and one `dynamodb:GetItem` pinned by
