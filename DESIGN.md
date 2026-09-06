@@ -539,16 +539,31 @@ Lambda (`report.tf`, `backend/src/handlers/report.ts`) wakes on an EventBridge
 cron, reads the usage metrics above back out of CloudWatch with
 `GetMetricData`, and mails a digest through its own SNS topic.
 
-Two things keep it from growing the bot's blast radius. It is its own Lambda
-and IAM role rather than a branch inside `api`, scoped to only
-`cloudwatch:GetMetricData` and `sns:Publish` — it cannot read a bill or touch
-the bot token even with a bug in it. And "total unique users" costs no new
-storage: `NewUsers` is a metric filter on the `new user` log line `recordUse`
-emits the first time a pseudonym's conditional create succeeds (see the
-comment above it in `db.ts`), so the daily count is `SUM(NewUsers)` over a day
-and the running total is the same sum over the metric's ~15-month retention —
-consistent with "usage is measured from logs, not stored data" above, and one
-more thing the usage table in DynamoDB does not need to be scanned to answer.
+It is its own Lambda and IAM role rather than a branch inside `api`, scoped to
+`cloudwatch:GetMetricData`, `sns:Publish`, and one `dynamodb:GetItem` pinned by
+a `dynamodb:LeadingKeys` condition to the single key holding the user total — it
+cannot read a bill or touch the bot token even with a bug in it. The daily
+counts cost no new storage: each is a sum over the metric filters above,
+`NewUsers` among them, which fires on the `new user` line `recordUse` emits the
+first time a pseudonym's conditional create succeeds.
+
+**"Total unique users" is the exception, and it was briefly wrong.** The running
+total started out as that same `SUM(NewUsers)`, taken over the metric's
+~15-month retention instead of over a day — free, and one more thing the usage
+table did not need to be scanned to answer. It does not work. A metric filter
+has no history: it begins at zero the moment Terraform creates it and can never
+match a log line written before it existed. Deployed after the bot had already
+been used, it reported 1 unique user while the table held 2, and would have
+undercounted by that same fixed offset forever.
+
+So the total is now counted where the fact lives. `recordUse` bumps a
+`meta#users` counter in the same branch that creates the `usr#` row, and the
+report reads that one item. A counter rather than the rows themselves because
+counting the rows means a Scan, and IAM has no notion of a key prefix — granting
+the report Lambda a Scan would grant it every bill in the table, which is
+precisely what giving it a separate role was for. The rows remain the ground
+truth: `scripts/users.ts` recounts them, compares, and repairs the counter, and
+is also how the question gets answered by hand.
 
 ### Cost
 

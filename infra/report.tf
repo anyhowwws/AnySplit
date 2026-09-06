@@ -2,20 +2,28 @@
 # Daily usage report: API calls, parses attempted/succeeded, splits
 # finalised, new users, total unique users.
 #
-# Reads the metrics monitoring.tf already derives from the structured logs —
-# there is no separate table to scan, and "total unique users" falls out of
-# summing NewUsers over its whole retention rather than counting rows. See
-# backend/src/handlers/report.ts.
+# The daily numbers come from the metrics monitoring.tf derives from the
+# structured logs. "Total unique users" does not: a metric filter starts at zero
+# when Terraform creates it and cannot see a log line written before that, so
+# summing NewUsers over its retention silently drops everyone who signed up
+# before the filter was deployed. The running total is kept in the table beside
+# the rows it counts — see backend/src/lib/usercount.ts.
 #
-# Deliberately its own Lambda and role rather than a branch inside `api`: it
-# needs cloudwatch:GetMetricData and sns:Publish and nothing else, so it
-# cannot read a bill or touch the bot token even if it had a bug in it.
+# Deliberately its own Lambda and role rather than a branch inside `api`. It
+# needs cloudwatch:GetMetricData, sns:Publish, and a GetItem on exactly one key,
+# so it cannot read a bill or touch the bot token even if it had a bug in it.
 # --------------------------------------------------------------------
 
 locals {
   # Falls back to the alarm address so a deployment that only ever set one
   # email doesn't silently get a topic nobody is subscribed to.
   report_email = var.report_email != "" ? var.report_email : var.alarm_email
+
+  # Must match USER_COUNT_KEY in backend/src/lib/usercount.ts. It is repeated
+  # here rather than passed in because it is what the IAM condition below pins
+  # the report role's table access to — a variable would let a deployment widen
+  # that read without touching this file.
+  user_count_key = "meta#users"
 }
 
 resource "aws_sns_topic" "reports" {
@@ -67,6 +75,25 @@ data "aws_iam_policy_document" "report" {
     resources = ["*"]
   }
 
+  # The running total of unique users, and provably nothing else in the table.
+  # `dynamodb:LeadingKeys` matches the item's partition key, so this role can
+  # read the one counter item and cannot read a bill — which is the whole reason
+  # the report reads a counter rather than counting `usr#` rows itself. A Scan
+  # would be the natural way to count them and cannot be scoped this way: IAM
+  # has no notion of a key prefix, so granting it would grant every bill.
+  statement {
+    sid       = "ReadUserCount"
+    effect    = "Allow"
+    actions   = ["dynamodb:GetItem"]
+    resources = [aws_dynamodb_table.bills.arn]
+
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "dynamodb:LeadingKeys"
+      values   = [local.user_count_key]
+    }
+  }
+
   statement {
     sid       = "PublishReport"
     effect    = "Allow"
@@ -91,7 +118,8 @@ resource "aws_lambda_function" "report" {
   filename         = data.archive_file.report.output_path
   source_code_hash = data.archive_file.report.output_base64sha256
 
-  # Six GetMetricData calls and one Publish; generous headroom over tight.
+  # Five GetMetricData calls, one GetItem and one Publish; generous headroom
+  # over tight.
   timeout     = 30
   memory_size = 256
 
@@ -99,6 +127,7 @@ resource "aws_lambda_function" "report" {
     variables = {
       REPORTS_TOPIC_ARN = aws_sns_topic.reports.arn
       HTTP_API_ID       = aws_apigatewayv2_api.http.id
+      BILLS_TABLE       = aws_dynamodb_table.bills.name
     }
   }
 

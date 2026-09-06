@@ -1,24 +1,29 @@
 import { CloudWatchClient, GetMetricDataCommand } from '@aws-sdk/client-cloudwatch';
 import { PublishCommand, SNSClient } from '@aws-sdk/client-sns';
 import { errorFields, log } from '../lib/log.ts';
+import { readUserCount } from '../lib/usercount.ts';
 
 /**
  * EventBridge-triggered, once a day. Reads counts back out of the metrics
  * monitoring.tf already derives from the structured logs — no new storage —
  * and mails a short digest through SNS.
  *
- * Nothing here touches the bills table or the bot token: this Lambda only
- * needs cloudwatch:GetMetricData and sns:Publish, so a bug in it cannot affect
- * the bot or read anything about a bill. See infra/report.tf.
+ * Nothing here can read a bill or touch the bot token. Beyond
+ * cloudwatch:GetMetricData and sns:Publish it holds exactly one DynamoDB
+ * permission: GetItem on the single `meta#users` counter, pinned to that key by
+ * a `dynamodb:LeadingKeys` condition, so a bug in this Lambda still cannot
+ * reach a bill. See infra/report.tf.
+ *
+ * The daily counts come from the metrics; the running user total comes from the
+ * table, because a metric filter cannot see anything logged before it existed
+ * and so undercounts every user from before it was deployed. usercount.ts has
+ * the long version.
  */
 
 const cloudwatch = new CloudWatchClient({});
 const sns = new SNSClient({});
 
 const ANYSPLIT = 'AnySplit';
-
-/** CloudWatch keeps daily-period data for about 15 months. Stay under that. */
-const LOOKBACK_DAYS = 450;
 
 function required(name: string): string {
   const value = process.env[name];
@@ -61,7 +66,6 @@ export async function handler(): Promise<void> {
 
   const end = new Date();
   const dayStart = new Date(end.getTime() - 24 * 3600 * 1000);
-  const everStart = new Date(end.getTime() - LOOKBACK_DAYS * 24 * 3600 * 1000);
 
   try {
     const [apiCalls, visionCalls, receiptsParsed, billsFinalised, newUsers, totalUsers] =
@@ -71,7 +75,7 @@ export async function handler(): Promise<void> {
         sumMetric(ANYSPLIT, 'ReceiptsParsed', [], dayStart, end),
         sumMetric(ANYSPLIT, 'BillsFinalised', [], dayStart, end),
         sumMetric(ANYSPLIT, 'NewUsers', [], dayStart, end),
-        sumMetric(ANYSPLIT, 'NewUsers', [], everStart, end),
+        readUserCount(),
       ]);
 
     const dateLabel = end.toISOString().slice(0, 10);

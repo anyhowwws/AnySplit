@@ -220,6 +220,22 @@ Seven CloudWatch alarms and a daily usage digest cover what the logs alone would
 not; [DESIGN.md § Observability](DESIGN.md#observability) explains what each one
 is there to catch.
 
+### How many people have used it
+
+```bash
+cd backend && AWS_PROFILE=terraform npm run users
+```
+
+Counted from the `usr#` rows in DynamoDB — one per person, no expiry, written
+since the day the bot went up. Not from the `NewUsers` metric: a metric filter
+starts at zero when it is created and cannot see a signup logged before that, so
+it undercounts by however many people arrived first.
+
+The daily digest reads a counter kept beside those rows rather than counting
+them, because the report Lambda is deliberately not allowed to scan the table.
+If the two ever disagree the script says so, and `npm run users -- --reconcile`
+sets the counter back to the counted value.
+
 ### `/test` — exercising the flow without paying for a vision call
 
 `/test` runs seven canned receipts through the real `deriveBill()` logic — the
