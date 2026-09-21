@@ -3,13 +3,15 @@
 A Telegram bot that splits a restaurant bill from a photo of the receipt.
 
 One person photographs the receipt. A vision model reads it into structured
-line items. They assign each item to a name in a Telegram Mini App, and
-AnySplit returns a per-person total with service charge and GST folded in
-proportionally — either as one message per person to forward, or a single
-consolidated message to paste into a group chat.
+line items, in whatever currency is printed. They assign each item to a name in
+a Telegram Mini App, and AnySplit returns a per-person total with service
+charge and tax folded in proportionally — either as one message per person to
+forward, or a single consolidated message to paste into a group chat.
 
 Built for Singapore, where a bill might stack 10% service charge and then 9%
-GST, or have neither. Both are read off the receipt rather than configured.
+GST, or have neither. Both are read off the receipt rather than configured. A
+receipt in another currency — JPY, MYR, and a dozen others — is read the same
+way; SGD is only a default for when the receipt itself gives no indication.
 
 This document is the design rationale: how AnySplit is put together and why
 each decision went the way it did. [README.md](README.md) is the operational
@@ -86,7 +88,7 @@ the two bootstrap items noted at the bottom.
 
 | Application code | Language | Role |
 |---|---|---|
-| `shared/` | TypeScript | Types, money, calc, payee — imported by **both** backend and Mini App |
+| `shared/` | TypeScript | Types, money, currency, calc, payee — imported by **both** backend and Mini App |
 | `backend/src/handlers/` | TypeScript | Three Lambda entrypoints: `api`, `parser`, `report` |
 | `backend/src/lib/` | TypeScript | Bot, vision, preprocessing, DB, formatting, logging, auth |
 | `miniapp/src/` | React + Vite + Tailwind | Four-screen Mini App, static build |
@@ -324,6 +326,7 @@ architecturally is which fields are derived and which are decoration.
 |---|---|
 | `billId` | Partition key. 12-char base64url |
 | `adminId` | Telegram id of the payer. The only user allowed to read or mutate the bill |
+| `currency` | ISO 4217 code read off the receipt. Defaults to `SGD` — for the placeholder written before the vision call returns, and for bills written before multi-currency support existed at all |
 | `subtotal` | The sum of `units` — **not** the receipt's printed subtotal |
 | `total` | What was actually paid, in cents |
 | `factor` | `total / subtotal`. The only non-integer in the item, because it is a ratio, not money |
@@ -352,10 +355,15 @@ pure ceremony.
 
 Everything else follows from these.
 
-1. **All money is integer cents.** No floats in the database, the API, or the
-   model's output. Formatting to dollars happens only at render time. A float
-   bug did get through early — `Number("1.005") * 100` yields `100.4999…` — and
-   it was caught by a real receipt, which is why parsing is now decimal.
+1. **All money is an integer count of the bill's currency's minor unit.** No
+   floats in the database, the API, or the model's output. Every field still
+   named `cents` predates multi-currency support and keeps the name — for SGD,
+   USD and friends that minor unit really is a cent, but for JPY, KRW, VND and
+   IDR there's no minor unit in practical use, so the integer *is* the amount
+   (`shared/currency.ts`'s `minorDigits: 0`). Formatting to a currency's own
+   convention happens only at render time. A float bug did get through early —
+   `Number("1.005") * 100` yields `100.4999…` — and it was caught by a real
+   receipt, which is why parsing is decimal, not multiplied.
 
 2. **The grossing factor is derived, never configured.**
    `factor = total / subtotal`, applied to each person's item sum. That one
@@ -416,6 +424,56 @@ Two independent validation gates then run:
 The second exists because the first cannot catch an invented total. When a
 crop truncated the totals block, the model produced a plausible, wrong total
 that reconciled perfectly against the items it could see.
+
+### Reading the currency
+
+The vision call reports a currency alongside the amounts — read from a symbol,
+a code, or context like the merchant's address — defaulting to SGD only when
+the receipt gives no indication either way. That default matters: most photos
+this bot receives are Singaporean, and a wrong guess of "foreign" would be a
+worse failure mode than a wrong guess of "local."
+
+**A fixed allowlist, not whatever the model says.** `shared/currency.ts` holds
+symbol, decimal convention, and tax label for about fifteen currencies likely
+to show up on a receipt someone in or travelling from Singapore photographs.
+The tool schema's `currency` field enums against exactly that list, so a
+currency reaching the rest of the system is always one AnySplit knows how to
+format — the same reasoning as the fixed rate-limit tiers, applied to a
+different kind of unbounded input. A response outside the list — a schema
+violation `strict: true` shouldn't allow, but defence in depth costs one
+`if` — logs a warning and falls back to SGD rather than failing the parse.
+
+**Zero-decimal currencies are a real case, not an edge case.** JPY, KRW, VND
+and IDR have no minor unit in ordinary use — ¥500 is ¥500, not ¥5.00 — so
+`shared/money.ts`'s cent-handling functions all take a `minorDigits` parameter
+rather than assuming two. The Mini App's price and total inputs are
+uncontrolled (`defaultValue`, not `value`, so typing isn't fought by a
+re-render on every keystroke), which means they only pick up a new
+`minorDigits` on mount — so they're keyed on the currency, deliberately
+remounting if the admin corrects it after typing a price.
+
+**"GST" is a Singapore fact, not a universal one.** Malaysia has SST, most of
+the rest of the world has VAT or a generic sales tax, and guessing which one a
+foreign receipt actually printed would be inventing detail from a country code.
+So the tax line's label is per-currency (`taxLabel` in `shared/currency.ts`) —
+"GST" only for SGD, "Tax" everywhere else — while the underlying `gst`/
+`gstCents` fields keep their name throughout the codebase rather than being
+renamed for a label change.
+
+**The admin can correct a misread currency**, on the Review screen alongside
+merchant and prices — the same "a model proposes, the admin confirms" posture
+as everything else there.
+
+**Bills from before this feature default to SGD on read**, in `getBill`
+(`backend/src/lib/db.ts`), rather than needing a backfill migration — SGD was
+the only currency AnySplit understood before now, so an absent field and an
+explicit `SGD` mean the same thing for every bill written earlier.
+
+Deliberately not covered here: settling a bill back in the payer's home
+currency when their card was charged a different amount than the receipt's
+face value (no live FX rate is fetched — see "Things deliberately not built"),
+and a trip mixing currencies across several receipts, which needs the
+multi-receipt data model to exist first.
 
 ### Privacy as architecture, not policy
 
@@ -583,9 +641,10 @@ roughly $26–31 per thousand receipts at Sonnet 5 standard pricing. Input
 dominates at ~92%, almost all of it image tokens, which is the second reason
 cropping earns its place.
 
-`/test` runs seven canned fixtures through the real `deriveBill()` logic,
-exercising the entire flow — including validation failure paths — without
-spending anything on a vision call. The fixtures share the production code path
+`/test` runs nine canned fixtures through the real `deriveBill()` logic,
+exercising the entire flow — including validation failure paths and, with
+`tokyo` (JPY) and `kl` (MYR), the multi-currency paths — without spending
+anything on a vision call. The fixtures share the production code path
 specifically so they cannot drift from it.
 
 ### Things deliberately not built
@@ -601,6 +660,8 @@ specifically so they cannot drift from it.
 | Simultaneous claiming | Everyone claiming their own items in parallel is a nicer story and a much harder one. One person assigning is enough, and it keeps the whole bill under a single authority |
 | Voice assignment | "Marcus had the ribeye and two beers" is the best version of this product. It needs the rest of it to work first |
 | PayNow QR | High value, and the point at which a bill splitter starts to look like it moves money. Deliberately deferred rather than dismissed |
+| Settling a foreign bill back in SGD | Needs the payer's actual card-charged SGD amount, which only they have — not a fetched FX rate, which would disagree with their card statement by construction. Deferred rather than built wrong |
+| Multiple receipts consolidated into one split | One receipt covers the common case. Several needs a per-receipt `factor` (service charge and tax don't necessarily stack the same way twice) and a new story for how photos attach to a bill — deferred, not forgotten |
 
 ### Rate limiting
 
