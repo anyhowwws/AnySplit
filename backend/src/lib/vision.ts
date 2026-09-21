@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ParsedReceipt } from '../../../shared/types.ts';
+import { DEFAULT_CURRENCY, SUPPORTED_CURRENCY_CODES, isSupportedCurrency } from '../../../shared/currency.ts';
 import { config } from './config.ts';
 import { isCents } from './money.ts';
 import { log } from './log.ts';
@@ -34,6 +35,7 @@ const RECEIPT_TOOL: Anthropic.Tool & { strict?: boolean } = {
     additionalProperties: false,
     required: [
       'merchant',
+      'currency',
       'items',
       'subtotalCents',
       'serviceChargeCents',
@@ -45,6 +47,14 @@ const RECEIPT_TOOL: Anthropic.Tool & { strict?: boolean } = {
       merchant: {
         type: 'string',
         description: 'Restaurant or stall name as printed. Empty string if not legible.',
+      },
+      currency: {
+        type: 'string',
+        enum: SUPPORTED_CURRENCY_CODES,
+        description:
+          'The ISO 4217 code for the currency printed on the receipt — read from a symbol ' +
+          '($, ¥, ₩, RM, ฿, …), a currency code, or context like the merchant address. ' +
+          `Default to "${DEFAULT_CURRENCY}" when the receipt gives no indication either way.`,
       },
       items: {
         type: 'array',
@@ -122,13 +132,21 @@ const SYSTEM_PROMPT = [
   'line items that are not visible in the image.',
   '',
   'Rules:',
-  '- Every monetary value you return is an INTEGER NUMBER OF CENTS. Never a decimal.',
-  '- Transcribe only ordered items as items. Subtotal, service charge, GST, discount, rounding,',
-  '  total, tips, and payment lines are NOT items — they belong in their own fields.',
+  '- Every monetary value you return is an INTEGER NUMBER OF the receipt\'s own currency\'s',
+  '  smallest unit. Never a decimal. For a currency with no minor unit in practical use (JPY,',
+  '  KRW, VND, IDR), that is simply the printed whole-number amount.',
+  '- Identify the currency from any symbol, code, or context on the receipt. Most receipts you',
+  `  see are Singaporean and priced in SGD — default to that when nothing suggests otherwise.`,
+  '- Transcribe only ordered items as items. Subtotal, service charge, tax (GST/VAT/sales tax),',
+  '  discount, rounding, total, tips, and payment lines are NOT items — they belong in their',
+  '  own fields.',
   '- Report a discount in discountCents as a positive number, never as a negative item.',
-  '- Singapore receipts commonly stack a 10% service charge and then 9% GST. Report each as',
-  '  printed; do not compute or reconcile them yourself.',
-  '- Hawker and kopitiam receipts often have neither. Report 0 for both in that case.',
+  '- Singapore receipts commonly stack a 10% service charge and then 9% GST; receipts from',
+  '  elsewhere may show a single VAT/sales-tax line, or none. Put whatever tax line is printed',
+  '  into gstCents regardless of what it is locally called — report it as printed; do not',
+  '  compute or reconcile it yourself.',
+  '- Hawker and kopitiam receipts often have neither service charge nor tax. Report 0 for both',
+  '  in that case.',
   '- If a value is genuinely illegible, use your best reading rather than 0, and prefer',
   '  consistency with the total.',
 ].join('\n');
@@ -267,6 +285,16 @@ function validate(input: unknown): ParsedReceipt {
   receipt.merchant = cleanMerchant(receipt.merchant);
   if (receipt.items.length === 0) {
     throw new VisionError("couldn't find any line items — is this a receipt?");
+  }
+
+  // `strict: true` constrains this to the enum already, but a model can still
+  // omit the field on a malformed call — fall back rather than fail a whole
+  // parse over a currency guess, which is the same posture as cleanMerchant.
+  if (!isSupportedCurrency(receipt.currency)) {
+    log.warn('vision output outside supported currency list, defaulting', {
+      received: receipt.currency,
+    });
+    receipt.currency = DEFAULT_CURRENCY;
   }
   for (const field of [
     'subtotalCents',

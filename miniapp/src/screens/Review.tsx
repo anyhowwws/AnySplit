@@ -1,5 +1,6 @@
 import type { Unit } from '../../../shared/types.ts';
-import { centsToPlain, formatCents, parseCents } from '../../../shared/money.ts';
+import { centsToPlain, formatMoney, parseCents } from '../../../shared/money.ts';
+import { SUPPORTED_CURRENCY_CODES, currencyInfo } from '../../../shared/currency.ts';
 import { deriveFactor, subtotalOf } from '../../../shared/calc.ts';
 import { Banner, Card, PrimaryButton, Screen } from '../components/Chrome.tsx';
 
@@ -12,6 +13,8 @@ import { Banner, Card, PrimaryButton, Screen } from '../components/Chrome.tsx';
 export function Review({
   merchant,
   setMerchant,
+  currency,
+  setCurrency,
   units,
   setUnits,
   totalCents,
@@ -22,6 +25,8 @@ export function Review({
 }: {
   merchant: string;
   setMerchant: (value: string) => void;
+  currency: string;
+  setCurrency: (value: string) => void;
   units: Unit[];
   setUnits: (units: Unit[]) => void;
   totalCents: number;
@@ -33,6 +38,7 @@ export function Review({
   const subtotal = subtotalOf(units);
   const factor = deriveFactor(subtotal, totalCents);
   const upliftPct = (factor - 1) * 100;
+  const { symbol, minorDigits, taxLabel } = currencyInfo(currency);
 
   function updateUnit(id: string, patch: Partial<Unit>) {
     setUnits(units.map((unit) => (unit.id === id ? { ...unit, ...patch } : unit)));
@@ -67,17 +73,35 @@ export function Review({
     >
       {note ? <Banner tone="warn">⚠️ {note}</Banner> : null}
 
-      <label className="mb-4 block">
-        <span className="mb-1 block text-xs font-medium tracking-wide text-tg-hint uppercase">
-          Where
-        </span>
-        <input
-          value={merchant}
-          onChange={(event) => setMerchant(event.target.value)}
-          placeholder="Restaurant name"
-          className="w-full rounded-xl bg-tg-secondary px-3 py-2.5 text-base outline-none"
-        />
-      </label>
+      <div className="mb-4 flex gap-2">
+        <label className="min-w-0 flex-1 block">
+          <span className="mb-1 block text-xs font-medium tracking-wide text-tg-hint uppercase">
+            Where
+          </span>
+          <input
+            value={merchant}
+            onChange={(event) => setMerchant(event.target.value)}
+            placeholder="Restaurant name"
+            className="w-full rounded-xl bg-tg-secondary px-3 py-2.5 text-base outline-none"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium tracking-wide text-tg-hint uppercase">
+            Currency
+          </span>
+          <select
+            value={currency}
+            onChange={(event) => setCurrency(event.target.value)}
+            className="h-full rounded-xl bg-tg-secondary px-3 py-2.5 text-base outline-none"
+          >
+            {SUPPORTED_CURRENCY_CODES.map((code) => (
+              <option key={code} value={code}>
+                {code}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
 
       <span className="mb-1 block text-xs font-medium tracking-wide text-tg-hint uppercase">
         Items
@@ -102,18 +126,23 @@ export function Review({
               placeholder="Item"
               className="min-w-0 flex-1 bg-transparent text-base outline-none"
             />
-            <span className="text-tg-hint">$</span>
+            <span className="text-tg-hint">{symbol}</span>
             <input
-              defaultValue={centsToPlain(unit.cents)}
+              // Keyed on currency: an uncontrolled input's defaultValue only
+              // takes effect on mount, so switching currency (which can change
+              // minorDigits — 2-decimal to 0-decimal) needs a remount to
+              // reformat the figure already sitting in the box.
+              key={currency}
+              defaultValue={centsToPlain(unit.cents, minorDigits)}
               onBlur={(event) => {
-                const cents = parseCents(event.target.value);
+                const cents = parseCents(event.target.value, minorDigits);
                 if (cents === null || cents < 0) {
                   // Reject silently and snap back — an inline error for a typo
                   // in a 20-row list is more noise than help.
-                  event.target.value = centsToPlain(unit.cents);
+                  event.target.value = centsToPlain(unit.cents, minorDigits);
                   return;
                 }
-                event.target.value = centsToPlain(cents);
+                event.target.value = centsToPlain(cents, minorDigits);
                 updateUnit(unit.id, { cents });
               }}
               inputMode="decimal"
@@ -140,20 +169,22 @@ export function Review({
       </button>
 
       <div className="mt-6 space-y-1.5 text-sm">
-        <Row label="Items" value={formatCents(subtotal)} />
+        <Row label="Items" value={formatMoney(subtotal, currency)} />
         <div className="flex items-center justify-between">
           <span className="text-tg-hint">Total paid</span>
           <div className="flex items-center gap-1">
-            <span className="text-tg-hint">$</span>
+            <span className="text-tg-hint">{symbol}</span>
             <input
-              defaultValue={centsToPlain(totalCents)}
+              // See the item-price input above for why this remounts on currency.
+              key={currency}
+              defaultValue={centsToPlain(totalCents, minorDigits)}
               onBlur={(event) => {
-                const cents = parseCents(event.target.value);
+                const cents = parseCents(event.target.value, minorDigits);
                 if (cents === null || cents <= 0) {
-                  event.target.value = centsToPlain(totalCents);
+                  event.target.value = centsToPlain(totalCents, minorDigits);
                   return;
                 }
-                event.target.value = centsToPlain(cents);
+                event.target.value = centsToPlain(cents, minorDigits);
                 setTotalCents(cents);
               }}
               inputMode="decimal"
@@ -164,9 +195,9 @@ export function Review({
         {subtotal > 0 ? (
           <p className="pt-1 text-xs text-tg-hint">
             {Math.abs(upliftPct) < 0.05
-              ? 'No service charge or GST on this bill.'
+              ? `No service charge or ${taxLabel} on this bill.`
               : upliftPct > 0
-                ? `Service charge and GST add ${upliftPct.toFixed(1)}%, spread across everyone in proportion to what they ordered.`
+                ? `Service charge and ${taxLabel} add ${upliftPct.toFixed(1)}%, spread across everyone in proportion to what they ordered.`
                 : `A ${Math.abs(upliftPct).toFixed(1)}% discount, spread across everyone in proportion to what they ordered.`}
           </p>
         ) : null}

@@ -20,7 +20,8 @@ import { claimUpdate, getBill, saveEdits, saveShares } from '../lib/db.ts';
 import { consolidatedMessage, shareMessage } from '../lib/format.ts';
 import { isBillId } from '../lib/ids.ts';
 import { addLogContext, consumeColdStart, errorFields, log, withLogContext } from '../lib/log.ts';
-import { formatCents, isCents } from '../lib/money.ts';
+import { formatMoney, isCents } from '../lib/money.ts';
+import { isSupportedCurrency } from '../../../shared/currency.ts';
 import { cleanPayee, toStoredPayee } from '../../../shared/payee.ts';
 import { initDataFromAuthHeader, verifyInitData } from '../lib/initdata.ts';
 import { getBot } from '../lib/telegram.ts';
@@ -201,14 +202,17 @@ app.patch('/api/bills/:id', async (c) => {
 
   const merchant = body.merchant === undefined ? bill.merchant : body.merchant.slice(0, 120);
 
+  const currency = body.currency === undefined ? bill.currency : body.currency;
+  if (!isSupportedCurrency(currency)) return c.json({ error: 'invalid currency' }, 400);
+
   // subtotal and factor are always derived, never accepted from the client.
   const subtotal = subtotalOf(units);
   const factor = deriveFactor(subtotal, total);
 
-  await saveEdits(bill.billId, { merchant, subtotal, total, factor, units });
-  log.info('bill edited', { billId: bill.billId, subtotal, total, factor });
+  await saveEdits(bill.billId, { merchant, currency, subtotal, total, factor, units });
+  log.info('bill edited', { billId: bill.billId, currency, subtotal, total, factor });
 
-  const updated: Bill = { ...bill, merchant, subtotal, total, factor, units };
+  const updated: Bill = { ...bill, merchant, currency, subtotal, total, factor, units };
   return c.json({ bill: updated } satisfies { bill: Bill });
 });
 
@@ -241,7 +245,7 @@ app.post('/api/bills/:id/finalise', async (c) => {
       {
         error:
           `${unclaimed.length} item${unclaimed.length === 1 ? '' : 's'} ` +
-          `(${formatCents(outstanding)}) still need assigning`,
+          `(${formatMoney(outstanding, bill.currency)}) still need assigning`,
       },
       400,
     );

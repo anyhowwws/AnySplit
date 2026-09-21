@@ -1,6 +1,6 @@
 import type { ParsedReceipt, Unit } from '../../../shared/types.ts';
 import { deriveFactor, expandUnits, reconcilesToSubtotal, subtotalOf, summaryDelta } from './calc.ts';
-import { formatCents } from './money.ts';
+import { formatMoney } from './money.ts';
 
 /**
  * Turns a parsed receipt into the fields a bill stores.
@@ -11,6 +11,7 @@ import { formatCents } from './money.ts';
  */
 export interface DerivedBill {
   merchant: string;
+  currency: string;
   subtotal: number;
   total: number;
   factor: number;
@@ -39,8 +40,8 @@ export function deriveBill(receipt: ParsedReceipt): DerivedBill {
 
   if (!reconcilesToSubtotal(receipt)) {
     warnings.push(
-      `The items add up to ${formatCents(subtotal)} but the receipt's subtotal reads ` +
-        `${formatCents(receipt.subtotalCents)}.`,
+      `The items add up to ${formatMoney(subtotal, receipt.currency)} but the receipt's ` +
+        `subtotal reads ${formatMoney(receipt.subtotalCents, receipt.currency)}.`,
     );
   }
 
@@ -48,18 +49,20 @@ export function deriveBill(receipt: ParsedReceipt): DerivedBill {
   // is out of frame and it fills the field in from nothing.
   const delta = summaryDelta(receipt);
   if (delta !== 0) {
+    const money = (cents: number) => formatMoney(cents, receipt.currency);
     warnings.push(
-      `The total doesn't match the charges: ${formatCents(receipt.subtotalCents)} ` +
-        `${receipt.discountCents ? `− ${formatCents(receipt.discountCents)} ` : ''}` +
-        `${receipt.serviceChargeCents ? `+ ${formatCents(receipt.serviceChargeCents)} ` : ''}` +
-        `${receipt.gstCents ? `+ ${formatCents(receipt.gstCents)} ` : ''}` +
-        `should be ${formatCents(receipt.totalCents - delta)}, but the total reads ` +
-        `${formatCents(receipt.totalCents)}.`,
+      `The total doesn't match the charges: ${money(receipt.subtotalCents)} ` +
+        `${receipt.discountCents ? `− ${money(receipt.discountCents)} ` : ''}` +
+        `${receipt.serviceChargeCents ? `+ ${money(receipt.serviceChargeCents)} ` : ''}` +
+        `${receipt.gstCents ? `+ ${money(receipt.gstCents)} ` : ''}` +
+        `should be ${money(receipt.totalCents - delta)}, but the total reads ` +
+        `${money(receipt.totalCents)}.`,
     );
   }
 
   return {
     merchant: receipt.merchant,
+    currency: receipt.currency,
     subtotal,
     total,
     factor,

@@ -3,13 +3,16 @@
 A Telegram bot that splits a restaurant bill from a photo of the receipt.
 
 One person photographs the receipt and assigns each item to a name in a Telegram
-Mini App. AnySplit produces a per-person total with service charge and GST folded
-in proportionally, and sends it back either as one forwardable message per person
-or as a single consolidated message to paste into a group chat. Each message
-carries the full breakdown inline — no links to follow.
+Mini App. AnySplit produces a per-person total, in the receipt's own currency,
+with service charge and tax folded in proportionally, and sends it back either
+as one forwardable message per person or as a single consolidated message to
+paste into a group chat. Each message carries the full breakdown inline — no
+links to follow.
 
 Built for Singapore, where a receipt might stack 10% service charge and then 9%
 GST, or have neither — so both are read off the receipt rather than configured.
+Receipts in other currencies are read too — JPY, MYR, USD, and a dozen others —
+defaulting to SGD only when the receipt gives no indication otherwise.
 
 **Live.** Deployed and working end to end: photo in, per-person or group
 messages out.
@@ -24,7 +27,7 @@ Terraform specifics: bootstrap, credentials, and the CI role.
 
 ```
 AnySplit/
-├── shared/          types, money, calc, payee — imported by BOTH backend and miniapp
+├── shared/          types, money, currency, calc, payee — imported by BOTH backend and miniapp
 ├── backend/         three Lambdas: `api` (webhook + REST), `parser` (vision), `report` (daily digest)
 ├── miniapp/         React + Vite + Tailwind, static, served from CloudFront
 ├── infra/           Terraform
@@ -208,6 +211,7 @@ The lines worth knowing:
 | `image preprocessed` | `cropped` and `keptFraction`. `cropped:false` means the crop bailed and accuracy will be lower |
 | `vision call complete` | `inputTokens` scales with image area — a jump usually means cropping stopped working, not longer receipts |
 | `receipt parsed` | `reconciled:false` means items don't match the printed subtotal |
+| `vision output outside supported currency list, defaulting` | The model named a currency `shared/currency.ts` doesn't know how to format; the bill fell back to SGD. Rare — worth a look if it's not |
 
 **Two deliberate omissions.** No message text, item names, or image bytes are ever
 logged — a log line is storage, and AnySplit promises receipts aren't stored. For
@@ -238,11 +242,12 @@ sets the counter back to the counted value.
 
 ### `/test` — exercising the flow without paying for a vision call
 
-`/test` runs seven canned receipts through the real `deriveBill()` logic — the
-whole flow, including the validation failure paths, with only the model call
-skipped. It is gated to the single Telegram id in `TEST_USER_ID`, and an empty
-setting disables it, so an unconfigured deployment fails closed. Send `/test` with
-no argument for the menu.
+`/test` runs nine canned receipts through the real `deriveBill()` logic — the
+whole flow, including the validation failure paths and two multi-currency cases
+(`tokyo`, a zero-decimal JPY receipt; `kl`, a two-decimal MYR one), with only the
+model call skipped. It is gated to the single Telegram id in `TEST_USER_ID`, and
+an empty setting disables it, so an unconfigured deployment fails closed. Send
+`/test` with no argument for the menu.
 
 ## Cost
 

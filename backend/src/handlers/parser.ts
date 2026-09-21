@@ -106,6 +106,7 @@ async function parseAndSave(
 
   await saveParse(bill.billId, {
     merchant: derived.merchant,
+    currency: derived.currency,
     subtotal: derived.subtotal,
     total: derived.total,
     factor: derived.factor,

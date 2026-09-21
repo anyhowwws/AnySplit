@@ -34,6 +34,7 @@ export const FIXTURES: Record<string, Fixture> = {
     description: 'restaurant, 10% service + 9% GST, everything balances',
     receipt: {
       merchant: 'Le Shrimp Noodle Bar',
+      currency: 'SGD',
       items: [
         item('Prawn Dumpling Noodle', 1560),
         item('Signature La Mian', 1420),
@@ -53,6 +54,7 @@ export const FIXTURES: Record<string, Fixture> = {
     description: 'hawker stall, no service charge and no GST (factor 1.0)',
     receipt: {
       merchant: 'Tiong Bahru Hainanese Chicken',
+      currency: 'SGD',
       items: [
         item('Chicken Rice', 450, 2),
         item('Kopi O', 160),
@@ -71,6 +73,7 @@ export const FIXTURES: Record<string, Fixture> = {
     description: '20% discount, then service + GST (total below item sum)',
     receipt: {
       merchant: 'Shin Katsu',
+      currency: 'SGD',
       items: [
         item('Kurobuta Rosu Katsu Set', 3580, 2),
         item('Mille-Feuille Katsu Set', 3080),
@@ -89,6 +92,7 @@ export const FIXTURES: Record<string, Fixture> = {
     description: '9% GST, no service charge',
     receipt: {
       merchant: 'Cedele Bakery',
+      currency: 'SGD',
       items: [item('Flat White', 620), item('Avocado Toast', 1480), item('Carrot Cake Slice', 780)],
       subtotalCents: 2880,
       serviceChargeCents: 0,
@@ -104,6 +108,7 @@ export const FIXTURES: Record<string, Fixture> = {
     description: "items don't match the printed subtotal — triggers the warning",
     receipt: {
       merchant: 'Faded Thermal Cafe',
+      currency: 'SGD',
       items: [item('Spicy Mala Popcorn Chicken', 1690), item('Truffle Cheese Fries', 1590)],
       // Printed subtotal disagrees with the items above by $8.00, exactly the
       // kind of misread the gate exists to catch.
@@ -121,6 +126,7 @@ export const FIXTURES: Record<string, Fixture> = {
     description: '12 lines, 17 units, 5 shared — good for the group message',
     receipt: {
       merchant: "Harry's @ Robertson Quay",
+      currency: 'SGD',
       items: [
         item('Chicken Quesadillas', 1700, 1, true),
         item('Herb-Marinated Tomapork', 2900, 2),
@@ -150,6 +156,7 @@ export const FIXTURES: Record<string, Fixture> = {
     description: "total doesn't match the charges — the 'invented total' gate",
     receipt: {
       merchant: 'Cut-Off Corner Bistro',
+      currency: 'SGD',
       items: [item('Ribeye', 4200), item('House Red', 1400, 2)],
       subtotalCents: 7000,
       serviceChargeCents: 700,
@@ -157,6 +164,48 @@ export const FIXTURES: Record<string, Fixture> = {
       discountCents: 0,
       // 7000 + 700 + 693 = 8393, so this is $6.07 adrift.
       totalCents: 9000,
+    },
+  },
+
+  /* Foreign, zero-decimal currency — exercises minorDigits: 0 end to end: the
+     model's own "cents" are whole yen, editing in the Mini App must not divide
+     by 100, and every rendered amount should read "¥1,234" with no ".00". */
+  tokyo: {
+    description: 'Tokyo izakaya in JPY — zero-decimal currency, no GST line',
+    receipt: {
+      merchant: 'Torikizoku Shibuya',
+      currency: 'JPY',
+      items: [
+        item('Yakitori Moriawase', 980, 1, true),
+        item('Karaage', 480, 2),
+        item('Highball', 350, 3),
+        item('Edamame', 280, 1, true),
+      ],
+      subtotalCents: 3270,
+      serviceChargeCents: 0,
+      gstCents: 0,
+      discountCents: 0,
+      totalCents: 3270,
+    },
+  },
+
+  /* Foreign, two-decimal currency with tax — the "GST" label should read
+     "Tax" throughout rather than naming a Singapore-specific charge. */
+  kl: {
+    description: 'Kuala Lumpur restaurant in MYR — foreign currency, 6% tax',
+    receipt: {
+      merchant: 'Village Park Restaurant',
+      currency: 'MYR',
+      items: [
+        item('Nasi Lemak Ayam Goreng', 1580, 2),
+        item('Teh Tarik', 480, 2),
+        item('Roti Canai', 320, 1, true),
+      ],
+      subtotalCents: 4440,
+      serviceChargeCents: 0,
+      gstCents: 266,
+      discountCents: 0,
+      totalCents: 4706,
     },
   },
 };
