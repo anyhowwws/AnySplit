@@ -57,11 +57,27 @@ export const CURRENCIES: Record<string, CurrencyInfo> = {
 
 export const SUPPORTED_CURRENCY_CODES = Object.keys(CURRENCIES);
 
+/**
+ * `Object.hasOwn`, not `in` — `in` walks the prototype chain, so `"toString"`,
+ * `"constructor"`, `"hasOwnProperty"` and every other `Object.prototype`
+ * member would otherwise read as a supported currency. Reached from a client
+ * body on `PATCH /api/bills/:id`, so this has to reject those the same as any
+ * other bad code, not just the ones that happen to not collide with a
+ * built-in property name.
+ */
 export function isSupportedCurrency(code: unknown): code is string {
-  return typeof code === 'string' && code in CURRENCIES;
+  return typeof code === 'string' && Object.hasOwn(CURRENCIES, code);
 }
 
-/** Falls back to the default currency's info — never throws on a bad code. */
+/**
+ * Falls back to the default currency's info — never throws on a bad code.
+ *
+ * `Object.hasOwn` here too: `CURRENCIES[code] ?? CURRENCIES[DEFAULT_CURRENCY]`
+ * looks like a safe fallback, but for a prototype property name `CURRENCIES[code]`
+ * resolves to the inherited method itself (e.g. `CURRENCIES.toString`), which is
+ * truthy — so `??` never fires and callers destructure `.symbol` etc. off a
+ * function instead of falling back to SGD.
+ */
 export function currencyInfo(code: string): CurrencyInfo {
-  return CURRENCIES[code] ?? CURRENCIES[DEFAULT_CURRENCY]!;
+  return Object.hasOwn(CURRENCIES, code) ? CURRENCIES[code]! : CURRENCIES[DEFAULT_CURRENCY]!;
 }

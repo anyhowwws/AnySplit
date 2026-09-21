@@ -46,19 +46,26 @@ export function formatMoney(cents: number, currency: string = DEFAULT_CURRENCY):
  * into ¥15.
  */
 export function parseCents(input: string, minorDigits: 0 | 2 = 2): number | null {
-  const cleaned = input.replace(/[^0-9.,-]/g, '').replace(',', '.');
-  if (!cleaned || cleaned.length > 20) return null;
-
   if (minorDigits === 0) {
-    // No fractional part to this currency's minor unit — anything after a
-    // decimal point is noise (a stray "." from a fumbled keyboard) rather than
-    // a value to round.
+    // This currency's minor unit doesn't exist, so a comma here is always
+    // thousands-grouping punctuation ("3,270"), never a decimal separator —
+    // dropped from the allowed-character set entirely, rather than reusing
+    // the 2-decimal path's "convert the first comma to a decimal point"
+    // cleanup below, which would read "3,270" as "3.270" and keep only the
+    // leading "3". A genuine decimal point is still where the digits end —
+    // anything after it is noise (a stray "." from a fumbled keyboard)
+    // rather than a value to round.
+    const cleaned = input.replace(/[^0-9.-]/g, '');
+    if (!cleaned || cleaned.length > 20) return null;
     const match = /^(-?)(\d+)/.exec(cleaned);
     if (!match) return null;
     const value = Number(match[2]);
     if (!Number.isFinite(value)) return null;
     return match[1] === '-' ? -value : value;
   }
+
+  const cleaned = input.replace(/[^0-9.,-]/g, '').replace(',', '.');
+  if (!cleaned || cleaned.length > 20) return null;
 
   const match = /^(-?)(\d*)(?:\.(\d*))?$/.exec(cleaned);
   if (!match) return null;
