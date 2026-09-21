@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Bill, SendMode, Share, Unit } from '../../shared/types.ts';
 import { CalcError, computeShares, deriveFactor, subtotalOf } from '../../shared/calc.ts';
+import { DEFAULT_CURRENCY } from '../../shared/currency.ts';
 import { type Payee } from '../../shared/payee.ts';
 import { ApiRequestError, fetchBill, finaliseBill, patchBill } from './lib/api.ts';
 import {
@@ -35,6 +36,7 @@ export function App() {
   // Working copies. The server holds the truth; these are the admin's edits
   // until the PATCH on leaving Review.
   const [merchant, setMerchant] = useState('');
+  const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
   const [units, setUnits] = useState<Unit[]>([]);
   const [totalCents, setTotalCents] = useState(0);
   const [names, setNames] = useState<string[]>([]);
@@ -52,6 +54,7 @@ export function App() {
       const { bill: loaded } = await fetchBill(billId);
       setBill(loaded);
       setMerchant(loaded.merchant);
+      setCurrency(loaded.currency);
       setUnits(loaded.units);
       setTotalCents(loaded.total);
       setLoadError(null);
@@ -126,7 +129,12 @@ export function App() {
     if (!bill) return;
     setBusy(true);
     try {
-      const { bill: updated } = await patchBill(bill.billId, { merchant, total: totalCents, units });
+      const { bill: updated } = await patchBill(bill.billId, {
+        merchant,
+        currency,
+        total: totalCents,
+        units,
+      });
       setBill(updated);
       setUnits(updated.units);
       // Any unit the admin deleted must not linger in the assignment map.
@@ -259,6 +267,8 @@ export function App() {
         <Review
           merchant={merchant}
           setMerchant={setMerchant}
+          currency={currency}
+          setCurrency={setCurrency}
           units={units}
           setUnits={setUnits}
           totalCents={totalCents}
@@ -278,6 +288,7 @@ export function App() {
       return (
         <Assign
           units={units}
+          currency={currency}
           names={names}
           assignment={assignment}
           setAssignment={setAssignment}
@@ -305,6 +316,7 @@ export function App() {
           shares={preview.shares}
           units={units}
           total={totalCents}
+          currency={currency}
           factor={factor}
           names={names}
           payee={payee}

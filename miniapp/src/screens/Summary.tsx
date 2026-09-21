@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import type { SendMode, Share, Unit } from '../../../shared/types.ts';
 import { type Payee, normalisePhone } from '../../../shared/payee.ts';
-import { formatCents } from '../../../shared/money.ts';
+import { formatMoney } from '../../../shared/money.ts';
+import { currencyInfo } from '../../../shared/currency.ts';
 import {
   Card,
   PrimaryButton,
@@ -21,6 +22,7 @@ export function Summary({
   shares,
   units,
   total,
+  currency,
   factor,
   names,
   payee,
@@ -32,6 +34,7 @@ export function Summary({
   shares: Share[];
   units: Unit[];
   total: number;
+  currency: string;
   factor: number;
   /** The people splitting, so the payer can be picked rather than retyped. */
   names: string[];
@@ -59,6 +62,7 @@ export function Summary({
   const sum = shares.reduce((acc, share) => acc + share.cents, 0);
   const unitById = new Map(units.map((unit) => [unit.id, unit]));
   const upliftPct = (factor - 1) * 100;
+  const taxLabel = currencyInfo(currency).taxLabel;
 
   return (
     <Screen
@@ -108,7 +112,7 @@ export function Summary({
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="truncate text-base font-medium">{share.name}</span>
                   <span className="shrink-0 text-base font-semibold tabular-nums">
-                    {formatCents(share.cents)}
+                    {formatMoney(share.cents, currency)}
                   </span>
                 </div>
                 <p className="mt-0.5 text-xs text-tg-hint">
@@ -123,11 +127,11 @@ export function Summary({
       <div className="mt-4 space-y-1 text-sm">
         <div className="flex items-center justify-between">
           <span className="text-tg-hint">Sum of shares</span>
-          <span className="tabular-nums">{formatCents(sum)}</span>
+          <span className="tabular-nums">{formatMoney(sum, currency)}</span>
         </div>
         <div className="flex items-center justify-between font-medium">
           <span>Bill total</span>
-          <span className="tabular-nums">{formatCents(total)}</span>
+          <span className="tabular-nums">{formatMoney(total, currency)}</span>
         </div>
       </div>
 
@@ -224,10 +228,10 @@ export function Summary({
 
       <p className="mt-3 text-xs text-tg-hint">
         {Math.abs(upliftPct) >= 0.05
-          ? `Each share includes its own portion of the ${upliftPct > 0 ? `${upliftPct.toFixed(1)}% service charge and GST` : `${Math.abs(upliftPct).toFixed(1)}% discount`}. `
+          ? `Each share includes its own portion of the ${upliftPct > 0 ? `${upliftPct.toFixed(1)}% service charge and ${taxLabel}` : `${Math.abs(upliftPct).toFixed(1)}% discount`}. `
           : ''}
-        Rounding to whole cents leaves a cent or two over; it goes to the largest
-        share so the shares add up to exactly {formatCents(total)}.
+        Rounding leaves a little over; it goes to the largest share so the shares
+        add up to exactly {formatMoney(total, currency)}.
       </p>
     </Screen>
   );

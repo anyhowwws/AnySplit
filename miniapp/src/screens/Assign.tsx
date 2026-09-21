@@ -1,5 +1,6 @@
 import type { Unit } from '../../../shared/types.ts';
-import { formatCents } from '../../../shared/money.ts';
+import { formatMoney } from '../../../shared/money.ts';
+import { currencyInfo } from '../../../shared/currency.ts';
 import { unassignedCents } from '../../../shared/calc.ts';
 import { PrimaryButton, Screen, initials, personColour } from '../components/Chrome.tsx';
 import { haptic } from '../lib/telegram.ts';
@@ -16,17 +17,20 @@ export type Assignment = Record<string, number[]>;
  */
 export function Assign({
   units,
+  currency,
   names,
   assignment,
   setAssignment,
   onNext,
 }: {
   units: Unit[];
+  currency: string;
   names: string[];
   assignment: Assignment;
   setAssignment: (next: Assignment) => void;
   onNext: () => void;
 }) {
+  const taxLabel = currencyInfo(currency).taxLabel;
   const labels = disambiguate(units);
   const outstanding = unassignedCents(
     units,
@@ -84,7 +88,7 @@ export function Assign({
               {ready
                 ? 'Everything assigned'
                 : outstanding > 0
-                  ? `Unassigned: ${formatCents(outstanding)}`
+                  ? `Unassigned: ${formatMoney(outstanding, currency)}`
                   : `${unclaimed} item${unclaimed === 1 ? '' : 's'} still unassigned`}
             </span>
           </div>
@@ -115,7 +119,7 @@ export function Assign({
                   {labels.get(unit.id)}
                   {unit.shared ? <span className="ml-1 text-xs text-tg-hint">shared?</span> : null}
                 </span>
-                <span className="shrink-0 text-base tabular-nums">{formatCents(unit.cents)}</span>
+                <span className="shrink-0 text-base tabular-nums">{formatMoney(unit.cents, currency)}</span>
               </div>
 
               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -164,7 +168,7 @@ export function Assign({
 
               {selected.length > 1 ? (
                 <p className="mt-1.5 text-xs text-tg-hint">
-                  {formatCents(Math.round(perHead))} each, before service and GST
+                  {formatMoney(Math.round(perHead), currency)} each, before service and {taxLabel}
                 </p>
               ) : null}
             </div>

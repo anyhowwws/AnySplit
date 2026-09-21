@@ -16,7 +16,7 @@
 import { readFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import { deriveFactor, expandUnits, reconcilesToSubtotal, subtotalOf } from '../backend/src/lib/calc.ts';
-import { formatCents } from '../backend/src/lib/money.ts';
+import { formatMoney } from '../backend/src/lib/money.ts';
 import { config } from '../backend/src/lib/config.ts';
 import { cropToReceipt } from '../backend/src/lib/preprocess.ts';
 import { type ImageMediaType, parseReceipt } from '../backend/src/lib/vision.ts';
@@ -71,7 +71,7 @@ for (const file of files) {
       `${label}  (${Date.now() - started}ms, ${cropNote})  ${ok ? '✓ reconciles' : '✗ MISMATCH'}`,
     );
     console.log(`${'='.repeat(60)}`);
-    console.log(`merchant: ${receipt.merchant || '(none read)'}`);
+    console.log(`merchant: ${receipt.merchant || '(none read)'}  (${receipt.currency})`);
     console.log('');
 
     for (const item of receipt.items) {
@@ -79,24 +79,25 @@ for (const file of files) {
       const shared = item.isLikelyShared ? '  [shared?]' : '';
       const expansion = item.displayName !== item.rawName ? `  (${item.rawName})` : '';
       console.log(
-        `  ${qty}${item.displayName.padEnd(28)} ${formatCents(item.unitPriceCents * item.qty).padStart(9)}${shared}${expansion}`,
+        `  ${qty}${item.displayName.padEnd(28)} ${formatMoney(item.unitPriceCents * item.qty, receipt.currency).padStart(9)}${shared}${expansion}`,
       );
     }
 
     console.log('');
-    console.log(`  items sum      ${formatCents(unitSum).padStart(9)}`);
-    console.log(`  printed sub    ${formatCents(receipt.subtotalCents).padStart(9)}`);
-    console.log(`  discount       ${formatCents(receipt.discountCents).padStart(9)}`);
-    console.log(`  service        ${formatCents(receipt.serviceChargeCents).padStart(9)}`);
-    console.log(`  gst            ${formatCents(receipt.gstCents).padStart(9)}`);
-    console.log(`  total          ${formatCents(receipt.totalCents).padStart(9)}`);
+    const money = (cents: number) => formatMoney(cents, receipt.currency);
+    console.log(`  items sum      ${money(unitSum).padStart(9)}`);
+    console.log(`  printed sub    ${money(receipt.subtotalCents).padStart(9)}`);
+    console.log(`  discount       ${money(receipt.discountCents).padStart(9)}`);
+    console.log(`  service        ${money(receipt.serviceChargeCents).padStart(9)}`);
+    console.log(`  gst            ${money(receipt.gstCents).padStart(9)}`);
+    console.log(`  total          ${money(receipt.totalCents).padStart(9)}`);
     console.log(`  factor         ${factor.toFixed(4)}  (+${((factor - 1) * 100).toFixed(1)}%)`);
     console.log(`  units          ${units.length}`);
 
     if (!ok) {
       const delta = unitSum - receipt.subtotalCents;
       console.log('');
-      console.log(`  ⚠️  items are ${formatCents(Math.abs(delta))} ${delta > 0 ? 'over' : 'under'} the printed subtotal`);
+      console.log(`  ⚠️  items are ${money(Math.abs(delta))} ${delta > 0 ? 'over' : 'under'} the printed subtotal`);
     }
   } catch (err) {
     failed++;

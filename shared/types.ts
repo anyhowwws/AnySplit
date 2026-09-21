@@ -47,7 +47,13 @@ export interface Bill {
   /** Telegram user_id of the payer. The only user allowed to mutate this bill. */
   adminId: number;
   merchant: string;
-  /** Sum of all units, in cents. */
+  /**
+   * ISO 4217 code, e.g. "SGD", "JPY". Always present — defaults to "SGD" for
+   * bills created before multi-currency support, and for the placeholder bill
+   * written before the vision call has read anything.
+   */
+  currency: string;
+  /** Sum of all units, in cents (the bill's currency's minor unit; see money.ts). */
   subtotal: number;
   /** Amount actually payable, in cents. Includes service charge and GST. */
   total: number;
@@ -82,6 +88,8 @@ export interface Bill {
 /** The shape the vision model must return, enforced by a strict tool schema. */
 export interface ParsedReceipt {
   merchant: string;
+  /** ISO 4217 code the model read off the receipt; "SGD" when it can't tell. */
+  currency: string;
   items: ParsedItem[];
   subtotalCents: number;
   serviceChargeCents: number;
@@ -111,6 +119,8 @@ export interface GetBillResponse {
 /** PATCH /api/bills/:id — all fields optional; only what changed is sent. */
 export interface PatchBillRequest {
   merchant?: string;
+  /** ISO 4217 code. Must be one of shared/currency.ts's supported list. */
+  currency?: string;
   total?: number;
   units?: Unit[];
 }

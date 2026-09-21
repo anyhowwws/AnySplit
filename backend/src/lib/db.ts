@@ -7,6 +7,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import type { Bill, BillStatus, Share, Unit } from '../../../shared/types.ts';
 import type { StoredPayee } from '../../../shared/payee.ts';
+import { DEFAULT_CURRENCY } from '../../../shared/currency.ts';
 import { config } from './config.ts';
 import { log } from './log.ts';
 import { userRef } from './userref.ts';
@@ -55,7 +56,10 @@ export async function getBill(billId: string): Promise<Bill | null> {
     log.info('bill read after ttl expiry, treating as absent', { billId, ttl: item.ttl });
     return null;
   }
-  return item;
+  // Bills written before multi-currency support have no `currency` field.
+  // They were always SGD — that was the only currency AnySplit understood —
+  // so defaulting here keeps them displaying correctly without a migration.
+  return item.currency ? item : { ...item, currency: DEFAULT_CURRENCY };
 }
 
 /** Overwrites the parsed body of a bill once the vision call returns. */
@@ -63,6 +67,7 @@ export async function saveParse(
   billId: string,
   fields: {
     merchant: string;
+    currency: string;
     subtotal: number;
     total: number;
     factor: number;
@@ -79,11 +84,12 @@ export async function saveParse(
       TableName: config.tableName(),
       Key: { billId },
       UpdateExpression:
-        'SET merchant = :m, subtotal = :s, #total = :t, factor = :f, units = :u, ' +
+        'SET merchant = :m, currency = :cur, subtotal = :s, #total = :t, factor = :f, units = :u, ' +
         'serviceCharge = :sc, gst = :g, discount = :d, #status = :st, note = :n',
       ExpressionAttributeNames: { '#status': 'status', '#total': 'total' },
       ExpressionAttributeValues: {
         ':m': fields.merchant,
+        ':cur': fields.currency,
         ':s': fields.subtotal,
         ':t': fields.total,
         ':f': fields.factor,
@@ -101,17 +107,25 @@ export async function saveParse(
 /** Admin corrections from the Review screen. */
 export async function saveEdits(
   billId: string,
-  fields: { merchant: string; subtotal: number; total: number; factor: number; units: Unit[] },
+  fields: {
+    merchant: string;
+    currency: string;
+    subtotal: number;
+    total: number;
+    factor: number;
+    units: Unit[];
+  },
 ): Promise<void> {
   await client.send(
     new UpdateCommand({
       TableName: config.tableName(),
       Key: { billId },
       UpdateExpression:
-        'SET merchant = :m, subtotal = :s, #total = :t, factor = :f, units = :u',
+        'SET merchant = :m, currency = :cur, subtotal = :s, #total = :t, factor = :f, units = :u',
       ExpressionAttributeNames: { '#total': 'total' },
       ExpressionAttributeValues: {
         ':m': fields.merchant,
+        ':cur': fields.currency,
         ':s': fields.subtotal,
         ':t': fields.total,
         ':f': fields.factor,

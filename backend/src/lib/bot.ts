@@ -1,5 +1,6 @@
 import type { Bot, Context } from 'grammy';
 import type { Bill } from '../../../shared/types.ts';
+import { DEFAULT_CURRENCY } from '../../../shared/currency.ts';
 import { config } from './config.ts';
 import { getBill, putBill, recordUse, ttlFromNow } from './db.ts';
 import {
@@ -107,6 +108,9 @@ async function handleImage(ctx: Context): Promise<void> {
     billId,
     adminId: ctx.from.id,
     merchant: '',
+    // Overwritten once the vision call reads the receipt's actual currency;
+    // this placeholder only needs to satisfy the type until then.
+    currency: DEFAULT_CURRENCY,
     subtotal: 0,
     total: 0,
     factor: 1,
