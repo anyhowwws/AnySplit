@@ -63,6 +63,14 @@ export function Summary({
   const unitById = new Map(units.map((unit) => [unit.id, unit]));
   const upliftPct = (factor - 1) * 100;
   const taxLabel = currencyInfo(currency).taxLabel;
+  // PayNow is Singapore-specific — naming it on a foreign-currency bill would
+  // claim a payment rail that has nothing to do with what was actually paid.
+  // The field itself needs no other change: phone-linked mobile payment is
+  // the norm across most of the region this bot covers (DuitNow, PromptPay,
+  // GCash, …), and normalisePhone already passes through anything outside
+  // Singapore's own number shape rather than rejecting it.
+  const phonePlaceholder =
+    currency === 'SGD' ? 'Phone for PayNow (optional)' : 'Phone for payment (optional)';
 
   return (
     <Screen
@@ -207,7 +215,7 @@ export function Summary({
               const tidied = normalisePhone(payee.phone);
               if (tidied) setPayee({ ...payee, phone: tidied });
             }}
-            placeholder="Phone for PayNow (optional)"
+            placeholder={phonePlaceholder}
             inputMode="tel"
             autoComplete="tel"
             className="w-full bg-transparent px-3 py-2.5 text-base outline-none"
