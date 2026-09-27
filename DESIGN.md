@@ -262,7 +262,7 @@ sequenceDiagram
     P->>P: crop to receipt (hysteresis threshold)
     P->>C: vision call, forced tool use
     C-->>P: structured line items
-    P->>P: validate — two independent gates
+    P->>P: validate — three independent gates
     P->>DB: store units (status: review)
     P->>TG: edit message → summary + "Review & split"
 
@@ -415,15 +415,19 @@ and which is precisely what the Review screen exists for.
 **Structured output is forced**, via a tool schema with `strict: true`, rather
 than parsed out of prose.
 
-Two independent validation gates then run:
+Three independent validation gates then run:
 
 - `reconcilesToSubtotal()` — do the line items sum to the printed subtotal?
 - `summaryDelta()` — does `subtotal − discount + service + GST` equal the
   total, within five cents?
+- `currencyConfident` — did the model place the currency, or guess it?
 
 The second exists because the first cannot catch an invented total. When a
 crop truncated the totals block, the model produced a plausible, wrong total
-that reconciled perfectly against the items it could see.
+that reconciled perfectly against the items it could see. The third exists
+because neither arithmetic check can see a currency at all: a bill in the
+wrong currency balances perfectly. Any gate that trips lands in the same
+`note`, shown as a banner on the Review screen.
 
 ### Reading the currency
 
@@ -439,9 +443,18 @@ to show up on a receipt someone in or travelling from Singapore photographs.
 The tool schema's `currency` field enums against exactly that list, so a
 currency reaching the rest of the system is always one AnySplit knows how to
 format — the same reasoning as the fixed rate-limit tiers, applied to a
-different kind of unbounded input. A response outside the list — a schema
-violation `strict: true` shouldn't allow, but defence in depth costs one
-`if` — logs a warning and falls back to SGD rather than failing the parse.
+different kind of unbounded input.
+
+**When the model can't place it, it says so.** An enum has no "none of the
+above", so a receipt in a currency outside the list — or behind an ambiguous
+symbol like ¥, which is both yen and yuan — would otherwise be forced
+silently into some listed code. The schema's `currencyConfident` flag lets the
+model report that it guessed, and the bill carries a note asking the payer to
+check. A response outside the list entirely — a schema violation
+`strict: true` shouldn't allow, but defence in depth costs one `if` — falls
+back to SGD and is flagged the same way rather than failing the parse. An
+unmarked receipt is deliberately *not* a guess: it is SGD, per the default
+above, or every bare-numbered hawker chit would carry a warning.
 
 **Zero-decimal currencies are a real case, not an edge case.** JPY, KRW, VND
 and IDR have no minor unit in ordinary use — ¥500 is ¥500, not ¥5.00 — so
@@ -449,8 +462,20 @@ and IDR have no minor unit in ordinary use — ¥500 is ¥500, not ¥5.00 — so
 rather than assuming two. The Mini App's price and total inputs are
 uncontrolled (`defaultValue`, not `value`, so typing isn't fought by a
 re-render on every keystroke), which means they only pick up a new
-`minorDigits` on mount — so they're keyed on the currency, deliberately
-remounting if the admin corrects it after typing a price.
+`minorDigits` on mount — so they're keyed on `minorDigits`, remounting when
+the admin moves between a two- and zero-decimal currency, and not when the
+format doesn't change (SGD to USD keeps the cursor where it was). Typed input
+follows the same rules in both formats: a comma in a zero-decimal amount can
+only be thousands grouping, so "3,270" is ¥3,270, and a stray decimal rounds
+half up exactly as the two-decimal path does.
+
+The vision schema teaches the convention by example. `unitPriceCents` carries
+the one worked example, showing both formats ($12.00 is 1200; ¥1,200 is
+1200), and every other amount field points back to it. An earlier version
+kept a dollars-only example there while the system prompt described
+zero-decimal currencies; a model anchored on the example could have produced
+a bill 100× too large, and it would have passed both arithmetic gates, since
+they only check the fields against each other.
 
 **"GST" is a Singapore fact, not a universal one.** Malaysia has SST, most of
 the rest of the world has VAT or a generic sales tax, and guessing which one a
@@ -459,6 +484,15 @@ So the tax line's label is per-currency (`taxLabel` in `shared/currency.ts`) —
 "GST" only for SGD, "Tax" everywhere else — while the underlying `gst`/
 `gstCents` fields keep their name throughout the codebase rather than being
 renamed for a label change.
+
+The same goes for the rate. Messages quote charges at the rates printed — "10%
+service charge and 9% GST" — back-derived from the amounts, and Singapore
+levies GST on the subtotal *plus* the service charge. Whether tax lands on the
+service charge elsewhere varies, so a foreign bill with both says "10% service
+charge and tax" rather than quote a percentage its receipt never printed. With
+no service charge the base is the subtotal everywhere, and the rate is stated.
+Only the explanation changes: shares come from `total / subtotal` and never
+read either rate.
 
 **The admin can correct a misread currency**, on the Review screen alongside
 merchant and prices — the same "a model proposes, the admin confirms" posture
@@ -641,9 +675,10 @@ roughly $26–31 per thousand receipts at Sonnet 5 standard pricing. Input
 dominates at ~92%, almost all of it image tokens, which is the second reason
 cropping earns its place.
 
-`/test` runs nine canned fixtures through the real `deriveBill()` logic,
-exercising the entire flow — including validation failure paths and, with
-`tokyo` (JPY) and `kl` (MYR), the multi-currency paths — without spending
+`/test` runs ten canned fixtures through the real `deriveBill()` logic,
+exercising the entire flow — including all three validation gates and, with
+`tokyo` (JPY), `kl` (MYR) and `unsure` (an unsupported CHF receipt), the
+multi-currency paths — without spending
 anything on a vision call. The fixtures share the production code path
 specifically so they cannot drift from it.
 

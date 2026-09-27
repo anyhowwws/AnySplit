@@ -1,5 +1,5 @@
 import type { Bill, Share, Unit } from '../../../shared/types.ts';
-import { formatMoney } from './money.ts';
+import { moneyFormatter } from './money.ts';
 import { currencyInfo } from '../../../shared/currency.ts';
 // Type-only: this module stays pure presentation, with no path from here to
 // the database client that ratelimit.ts pulls in.
@@ -37,7 +37,7 @@ const MERCHANT_FALLBACK = 'Dining expenses';
 
 /** The message that replaces "Reading receipt…" once the parse lands. */
 export function parsedSummary(bill: Bill): string {
-  const money = (cents: number) => formatMoney(cents, bill.currency);
+  const money = moneyFormatter(bill.currency);
   const taxLabel = currencyInfo(bill.currency).taxLabel;
 
   const lines: string[] = [];
@@ -136,7 +136,7 @@ export function consolidatedMessage(
   botUsername: string,
   payee?: PayeeLike,
 ): string {
-  const money = (cents: number) => formatMoney(cents, bill.currency);
+  const money = moneyFormatter(bill.currency);
 
   /** `maxItems: Infinity` lists everything; a number truncates with "+N more". */
   const build = (maxItems: number): string => {
@@ -220,7 +220,7 @@ export function recipientBreakdown(bill: Bill, share: Share, payee?: PayeeLike):
   // they have already paid, and what they actually want to know is what the meal
   // cost them and how much is coming back.
   const isPayer = payee?.personIndex !== undefined && payee.personIndex === share.idx;
-  const money = (cents: number) => formatMoney(cents, bill.currency);
+  const money = moneyFormatter(bill.currency);
 
   const lines: string[] = [];
   lines.push(
@@ -236,7 +236,7 @@ export function recipientBreakdown(bill: Bill, share: Share, payee?: PayeeLike):
     .map((id) => bill.units.find((u) => u.id === id))
     .filter((u): u is Unit => u !== undefined);
 
-  for (const group of groupUnitsWithSharing(units, claimCount, bill.currency)) {
+  for (const group of groupUnitsWithSharing(units, claimCount, money)) {
     lines.push(group);
   }
 
@@ -287,7 +287,7 @@ export function recipientBreakdown(bill: Bill, share: Share, payee?: PayeeLike):
 function groupUnitsWithSharing(
   units: Unit[],
   claimCount: Map<string, number>,
-  currency: string,
+  money: (cents: number) => string,
 ): string[] {
   const groups = new Map<string, { label: string; qty: number; cents: number; sharedBy: number }>();
   for (const unit of units) {
@@ -309,7 +309,7 @@ function groupUnitsWithSharing(
   return [...groups.values()].map((group) => {
     const qty = group.qty > 1 ? `${group.qty}× ` : '';
     const split = group.sharedBy > 1 ? ` (split ${group.sharedBy} ways)` : '';
-    return `${qty}${esc(group.label)}${split} — ${formatMoney(Math.round(group.cents), currency)}`;
+    return `${qty}${esc(group.label)}${split} — ${money(Math.round(group.cents))}`;
   });
 }
 
@@ -318,8 +318,14 @@ function groupUnitsWithSharing(
  * service charge and 9% GST" rather than the 19.9% they compound to.
  *
  * Each rate is computed against its own base, which is the whole reason the two
- * don't simply add up: service charge applies to the subtotal, and GST applies
- * to the subtotal *plus* the service charge.
+ * don't simply add up: service charge applies to the subtotal, and in Singapore
+ * GST applies to the subtotal *plus* the service charge.
+ *
+ * That second base is a Singapore rule, not a universal one — whether tax lands
+ * on the service charge varies by country. So on a foreign bill carrying both,
+ * the tax is named without a rate: back-deriving one from an assumed base would
+ * quote a percentage the receipt never printed. With no service charge the base
+ * is the subtotal either way, and the rate is safe to state.
  *
  * Returns null when the receipt itemised neither charge, in which case there
  * are no rates to quote and the caller falls back to describing the effect.
@@ -327,6 +333,7 @@ function groupUnitsWithSharing(
 function chargeBreakdown(bill: Bill): string | null {
   const service = bill.serviceCharge ?? 0;
   const gst = bill.gst ?? 0;
+  const { taxLabel } = currencyInfo(bill.currency);
   const parts: string[] = [];
 
   if (service > 0 && bill.subtotal > 0) {
@@ -334,8 +341,10 @@ function chargeBreakdown(bill: Bill): string | null {
   }
   if (gst > 0) {
     const gstBase = bill.subtotal + service;
-    if (gstBase > 0) {
-      parts.push(`${formatRate(gst / gstBase)}% ${currencyInfo(bill.currency).taxLabel}`);
+    if (service > 0 && bill.currency !== 'SGD') {
+      parts.push(taxLabel.toLowerCase());
+    } else if (gstBase > 0) {
+      parts.push(`${formatRate(gst / gstBase)}% ${taxLabel}`);
     }
   }
 

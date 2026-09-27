@@ -1,6 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { ParsedReceipt } from '../../../shared/types.ts';
-import { DEFAULT_CURRENCY, SUPPORTED_CURRENCY_CODES, isSupportedCurrency } from '../../../shared/currency.ts';
+import {
+  DEFAULT_CURRENCY,
+  SUPPORTED_CURRENCY_CODES,
+  ZERO_DECIMAL_CURRENCIES,
+  isSupportedCurrency,
+} from '../../../shared/currency.ts';
 import { config } from './config.ts';
 import { isCents } from './money.ts';
 import { log } from './log.ts';
@@ -25,6 +30,9 @@ export class VisionError extends Error {}
  * definition, and older SDK typings omit it even though the API accepts it.
  * Widening here beats pinning an exact SDK patch version.
  */
+/** e.g. "IDR, JPY, KRW, VND" — named in the prompt from the same list money.ts formats by. */
+const ZERO_DECIMAL = ZERO_DECIMAL_CURRENCIES.join(', ');
+
 const RECEIPT_TOOL: Anthropic.Tool & { strict?: boolean } = {
   name: 'record_receipt',
   description:
@@ -36,6 +44,7 @@ const RECEIPT_TOOL: Anthropic.Tool & { strict?: boolean } = {
     required: [
       'merchant',
       'currency',
+      'currencyConfident',
       'items',
       'subtotalCents',
       'serviceChargeCents',
@@ -55,6 +64,14 @@ const RECEIPT_TOOL: Anthropic.Tool & { strict?: boolean } = {
           'The ISO 4217 code for the currency printed on the receipt — read from a symbol ' +
           '($, ¥, ₩, RM, ฿, …), a currency code, or context like the merchant address. ' +
           `Default to "${DEFAULT_CURRENCY}" when the receipt gives no indication either way.`,
+      },
+      currencyConfident: {
+        type: 'boolean',
+        description:
+          'False when the receipt points to a currency you could not pin down — an ambiguous ' +
+          'symbol such as ¥ with nothing else to go on — or to a currency that is not listed, ' +
+          `in which case set currency to "${DEFAULT_CURRENCY}". A receipt with no sign of any ` +
+          `currency at all is ${DEFAULT_CURRENCY} and counts as confident: true.`,
       },
       items: {
         type: 'array',
@@ -84,8 +101,10 @@ const RECEIPT_TOOL: Anthropic.Tool & { strict?: boolean } = {
             unitPriceCents: {
               type: 'integer',
               description:
-                'Price of ONE unit, as an INTEGER NUMBER OF CENTS. $12.00 is 1200, not 12 and ' +
-                'not 12.00. If the receipt prints a line total for qty > 1, divide it by qty.',
+                "Price of ONE unit, as an INTEGER in the receipt currency's smallest unit. " +
+                '$12.00 is 1200, not 12 and not 12.00. But currencies with no minor unit ' +
+                `(${ZERO_DECIMAL}) are reported exactly as printed: ¥1,200 is 1200, not 120000. ` +
+                'If the receipt prints a line total for qty > 1, divide it by qty.',
             },
             isLikelyShared: {
               type: 'boolean',
@@ -99,28 +118,35 @@ const RECEIPT_TOOL: Anthropic.Tool & { strict?: boolean } = {
       subtotalCents: {
         type: 'integer',
         description:
-          'The pre-tax subtotal in INTEGER CENTS. If the receipt prints no subtotal line, ' +
+          'The pre-tax subtotal, in the same units as unitPriceCents. If the receipt prints ' +
+          'no subtotal line, ' +
           'sum the line items yourself.',
       },
       serviceChargeCents: {
         type: 'integer',
-        description: 'Service charge in INTEGER CENTS. 0 if the receipt has no service charge.',
+        description:
+          'Service charge, in the same units as unitPriceCents. 0 if the receipt has no ' +
+          'service charge.',
       },
       gstCents: {
         type: 'integer',
-        description: 'GST/tax in INTEGER CENTS. 0 if the receipt shows no GST.',
+        description:
+          'Tax — GST, VAT, sales tax, whatever the receipt calls it — in the same units as ' +
+          'unitPriceCents. 0 if the receipt shows no tax line.',
       },
       discountCents: {
         type: 'integer',
         description:
-          'Any discount or promotion in INTEGER CENTS, as a POSITIVE number. 0 if there is ' +
+          'Any discount or promotion, in the same units as unitPriceCents, as a POSITIVE ' +
+          'number. 0 if there is ' +
           'none. Report it here rather than as a negative item; it has already been deducted ' +
           'from totalCents.',
       },
       totalCents: {
         type: 'integer',
         description:
-          'The final amount payable in INTEGER CENTS, after service charge, GST, and any ' +
+          'The final amount payable, in the same units as unitPriceCents, after service ' +
+          'charge, tax, and any ' +
           'discount or rounding line. This is the number the customer actually paid.',
       },
     },
@@ -133,10 +159,13 @@ const SYSTEM_PROMPT = [
   '',
   'Rules:',
   '- Every monetary value you return is an INTEGER NUMBER OF the receipt\'s own currency\'s',
-  '  smallest unit. Never a decimal. For a currency with no minor unit in practical use (JPY,',
-  '  KRW, VND, IDR), that is simply the printed whole-number amount.',
+  '  smallest unit. Never a decimal. For a currency with no minor unit in practical use',
+  `  (${ZERO_DECIMAL}), that is simply the printed whole-number amount.`,
   '- Identify the currency from any symbol, code, or context on the receipt. Most receipts you',
   `  see are Singaporean and priced in SGD — default to that when nothing suggests otherwise.`,
+  '  Set currencyConfident to false when the currency is ambiguous or not in the list, so the',
+  '  payer is asked to check it — but not merely because none is printed; an unmarked receipt',
+  '  is SGD.',
   '- Transcribe only ordered items as items. Subtotal, service charge, tax (GST/VAT/sales tax),',
   '  discount, rounding, total, tips, and payment lines are NOT items — they belong in their',
   '  own fields.',
@@ -290,11 +319,14 @@ function validate(input: unknown): ParsedReceipt {
   // `strict: true` constrains this to the enum already, but a model can still
   // omit the field on a malformed call — fall back rather than fail a whole
   // parse over a currency guess, which is the same posture as cleanMerchant.
+  // Unlike the merchant, though, a wrong currency changes what every amount
+  // means, so the fallback is flagged for the payer rather than applied quietly.
   if (!isSupportedCurrency(receipt.currency)) {
     log.warn('vision output outside supported currency list, defaulting', {
       received: receipt.currency,
     });
     receipt.currency = DEFAULT_CURRENCY;
+    receipt.currencyConfident = false;
   }
   for (const field of [
     'subtotalCents',
