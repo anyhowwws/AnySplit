@@ -90,6 +90,12 @@ export interface ParsedReceipt {
   merchant: string;
   /** ISO 4217 code the model read off the receipt; "SGD" when it can't tell. */
   currency: string;
+  /**
+   * False when `currency` is a guess — an ambiguous symbol, a currency outside
+   * the supported list, or a value vision.ts had to replace. Surfaced as a
+   * `note` so the payer checks it. Absent (the /test fixtures) means confident.
+   */
+  currencyConfident?: boolean;
   items: ParsedItem[];
   subtotalCents: number;
   serviceChargeCents: number;

@@ -16,7 +16,7 @@
 import { readFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 import { deriveFactor, expandUnits, reconcilesToSubtotal, subtotalOf } from '../backend/src/lib/calc.ts';
-import { formatMoney } from '../backend/src/lib/money.ts';
+import { moneyFormatter } from '../backend/src/lib/money.ts';
 import { config } from '../backend/src/lib/config.ts';
 import { cropToReceipt } from '../backend/src/lib/preprocess.ts';
 import { type ImageMediaType, parseReceipt } from '../backend/src/lib/vision.ts';
@@ -71,20 +71,23 @@ for (const file of files) {
       `${label}  (${Date.now() - started}ms, ${cropNote})  ${ok ? '✓ reconciles' : '✗ MISMATCH'}`,
     );
     console.log(`${'='.repeat(60)}`);
-    console.log(`merchant: ${receipt.merchant || '(none read)'}  (${receipt.currency})`);
+    console.log(
+      `merchant: ${receipt.merchant || '(none read)'}  ` +
+        `(${receipt.currency}${receipt.currencyConfident === false ? ', unsure' : ''})`,
+    );
     console.log('');
 
+    const money = moneyFormatter(receipt.currency);
     for (const item of receipt.items) {
       const qty = item.qty > 1 ? `${item.qty}× ` : '   ';
       const shared = item.isLikelyShared ? '  [shared?]' : '';
       const expansion = item.displayName !== item.rawName ? `  (${item.rawName})` : '';
       console.log(
-        `  ${qty}${item.displayName.padEnd(28)} ${formatMoney(item.unitPriceCents * item.qty, receipt.currency).padStart(9)}${shared}${expansion}`,
+        `  ${qty}${item.displayName.padEnd(28)} ${money(item.unitPriceCents * item.qty).padStart(9)}${shared}${expansion}`,
       );
     }
 
     console.log('');
-    const money = (cents: number) => formatMoney(cents, receipt.currency);
     console.log(`  items sum      ${money(unitSum).padStart(9)}`);
     console.log(`  printed sub    ${money(receipt.subtotalCents).padStart(9)}`);
     console.log(`  discount       ${money(receipt.discountCents).padStart(9)}`);

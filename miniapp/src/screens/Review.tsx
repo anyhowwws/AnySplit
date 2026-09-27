@@ -128,11 +128,12 @@ export function Review({
             />
             <span className="text-tg-hint">{symbol}</span>
             <input
-              // Keyed on currency: an uncontrolled input's defaultValue only
-              // takes effect on mount, so switching currency (which can change
-              // minorDigits — 2-decimal to 0-decimal) needs a remount to
-              // reformat the figure already sitting in the box.
-              key={currency}
+              // Keyed on minorDigits: an uncontrolled input's defaultValue only
+              // takes effect on mount, so a switch between 2-decimal and
+              // 0-decimal currencies needs a remount to reformat the figure
+              // already in the box. Keyed on the digits rather than the
+              // currency code, so SGD -> USD (same format) keeps the cursor.
+              key={minorDigits}
               defaultValue={centsToPlain(unit.cents, minorDigits)}
               onBlur={(event) => {
                 const cents = parseCents(event.target.value, minorDigits);
@@ -175,8 +176,8 @@ export function Review({
           <div className="flex items-center gap-1">
             <span className="text-tg-hint">{symbol}</span>
             <input
-              // See the item-price input above for why this remounts on currency.
-              key={currency}
+              // See the item-price input above for why this remounts on minorDigits.
+              key={minorDigits}
               defaultValue={centsToPlain(totalCents, minorDigits)}
               onBlur={(event) => {
                 const cents = parseCents(event.target.value, minorDigits);

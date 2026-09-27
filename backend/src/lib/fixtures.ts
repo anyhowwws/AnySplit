@@ -208,6 +208,24 @@ export const FIXTURES: Record<string, Fixture> = {
       totalCents: 4706,
     },
   },
+
+  /* A currency outside the supported list. The arithmetic balances perfectly, so
+     neither of the gates above would say anything — this one trips only because
+     the model reported it couldn't place the currency. */
+  unsure: {
+    description: "Zurich café in CHF, not a supported currency — currency flagged for review",
+    receipt: {
+      merchant: 'Café Sprüngli',
+      currency: 'SGD',
+      currencyConfident: false,
+      items: [item('Hot Chocolate', 750, 2), item('Luxemburgerli Box', 1800, 1, true)],
+      subtotalCents: 3300,
+      serviceChargeCents: 0,
+      gstCents: 0,
+      discountCents: 0,
+      totalCents: 3300,
+    },
+  },
 };
 
 export function fixtureNames(): string[] {

@@ -34,26 +34,48 @@ export const DEFAULT_CURRENCY = 'SGD';
 
 /**
  * Currencies likely to show up on a receipt someone in or travelling from
- * Singapore photographs. Extending this list is safe and additive — nothing
- * elsewhere hardcodes its length or order.
+ * Singapore photographs, by the symbol printed before the amount. Extending
+ * this list is safe and additive — nothing elsewhere hardcodes its length or
+ * order. Only the symbol is genuinely per-currency; the other fields are
+ * derived below.
  */
-export const CURRENCIES: Record<string, CurrencyInfo> = {
-  SGD: { symbol: '$', minorDigits: 2, taxLabel: 'GST' },
-  USD: { symbol: 'US$', minorDigits: 2, taxLabel: 'Tax' },
-  MYR: { symbol: 'RM', minorDigits: 2, taxLabel: 'Tax' },
-  THB: { symbol: '฿', minorDigits: 2, taxLabel: 'Tax' },
-  IDR: { symbol: 'Rp', minorDigits: 0, taxLabel: 'Tax' },
-  JPY: { symbol: '¥', minorDigits: 0, taxLabel: 'Tax' },
-  KRW: { symbol: '₩', minorDigits: 0, taxLabel: 'Tax' },
-  CNY: { symbol: 'RMB', minorDigits: 2, taxLabel: 'Tax' },
-  HKD: { symbol: 'HK$', minorDigits: 2, taxLabel: 'Tax' },
-  TWD: { symbol: 'NT$', minorDigits: 2, taxLabel: 'Tax' },
-  VND: { symbol: '₫', minorDigits: 0, taxLabel: 'Tax' },
-  PHP: { symbol: '₱', minorDigits: 2, taxLabel: 'Tax' },
-  GBP: { symbol: '£', minorDigits: 2, taxLabel: 'Tax' },
-  EUR: { symbol: '€', minorDigits: 2, taxLabel: 'Tax' },
-  AUD: { symbol: 'A$', minorDigits: 2, taxLabel: 'Tax' },
+const SYMBOLS: Record<string, string> = {
+  SGD: '$',
+  USD: 'US$',
+  MYR: 'RM',
+  THB: '฿',
+  IDR: 'Rp',
+  JPY: '¥',
+  KRW: '₩',
+  CNY: 'RMB',
+  HKD: 'HK$',
+  TWD: 'NT$',
+  VND: '₫',
+  PHP: '₱',
+  GBP: '£',
+  EUR: '€',
+  AUD: 'A$',
 };
+
+/**
+ * The supported currencies with no minor unit in practical use. Exported so
+ * the vision prompt names exactly this set rather than keeping its own copy.
+ */
+export const ZERO_DECIMAL_CURRENCIES: readonly string[] = ['IDR', 'JPY', 'KRW', 'VND'];
+
+/** Tax-line labels that differ from the generic "Tax" — see `taxLabel`. */
+const TAX_LABELS: Record<string, string> = { SGD: 'GST' };
+
+export const CURRENCIES: Record<string, CurrencyInfo> = Object.fromEntries(
+  Object.entries(SYMBOLS).map(([code, symbol]) => [
+    code,
+    {
+      symbol,
+      minorDigits: ZERO_DECIMAL_CURRENCIES.includes(code) ? 0 : 2,
+      taxLabel: TAX_LABELS[code] ?? 'Tax',
+    },
+  ]),
+);
 
 export const SUPPORTED_CURRENCY_CODES = Object.keys(CURRENCIES);
 

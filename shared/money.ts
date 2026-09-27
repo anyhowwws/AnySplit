@@ -28,8 +28,16 @@ export function centsToPlain(cents: number, minorDigits: 0 | 2 = 2): string {
  * exactly as before.
  */
 export function formatMoney(cents: number, currency: string = DEFAULT_CURRENCY): string {
-  const info = currencyInfo(currency);
-  return `${info.symbol}${centsToPlain(cents, info.minorDigits)}`;
+  return moneyFormatter(currency)(cents);
+}
+
+/**
+ * `formatMoney` with the currency already bound, for code that formats many
+ * amounts from one bill: `const money = moneyFormatter(bill.currency)`.
+ */
+export function moneyFormatter(currency: string): (cents: number) => string {
+  const { symbol, minorDigits } = currencyInfo(currency);
+  return (cents) => `${symbol}${centsToPlain(cents, minorDigits)}`;
 }
 
 /**
@@ -46,25 +54,14 @@ export function formatMoney(cents: number, currency: string = DEFAULT_CURRENCY):
  * into ¥15.
  */
 export function parseCents(input: string, minorDigits: 0 | 2 = 2): number | null {
-  if (minorDigits === 0) {
-    // This currency's minor unit doesn't exist, so a comma here is always
-    // thousands-grouping punctuation ("3,270"), never a decimal separator —
-    // dropped from the allowed-character set entirely, rather than reusing
-    // the 2-decimal path's "convert the first comma to a decimal point"
-    // cleanup below, which would read "3,270" as "3.270" and keep only the
-    // leading "3". A genuine decimal point is still where the digits end —
-    // anything after it is noise (a stray "." from a fumbled keyboard)
-    // rather than a value to round.
-    const cleaned = input.replace(/[^0-9.-]/g, '');
-    if (!cleaned || cleaned.length > 20) return null;
-    const match = /^(-?)(\d+)/.exec(cleaned);
-    if (!match) return null;
-    const value = Number(match[2]);
-    if (!Number.isFinite(value)) return null;
-    return match[1] === '-' ? -value : value;
-  }
-
-  const cleaned = input.replace(/[^0-9.,-]/g, '').replace(',', '.');
+  // A comma is a decimal separator only where there are decimals to separate
+  // ("17,85"). In a currency with no minor unit it can only be thousands
+  // grouping ("3,270"), so it is dropped outright — converting it to a decimal
+  // point would read "3,270" as 3.270 and keep only the 3.
+  const cleaned =
+    minorDigits === 0
+      ? input.replace(/[^0-9.-]/g, '')
+      : input.replace(/[^0-9.,-]/g, '').replace(',', '.');
   if (!cleaned || cleaned.length > 20) return null;
 
   const match = /^(-?)(\d*)(?:\.(\d*))?$/.exec(cleaned);
@@ -75,8 +72,13 @@ export function parseCents(input: string, minorDigits: 0 | 2 = 2): number | null
   const frac = match[3] ?? '';
   if (whole === '' && frac === '') return null; // bare "." or "-"
 
+  // At minorDigits 0 the fractional part contributes nothing here, and only
+  // its first digit matters below — "1234.6" rounds to 1235, the same rule the
+  // 2-decimal path applies one place further along.
   const scale = 10 ** minorDigits;
-  let value = Number(whole || '0') * scale + Number(`${frac}${'0'.repeat(minorDigits)}`.slice(0, minorDigits));
+  let value =
+    Number(whole || '0') * scale +
+    Number(`${frac}${'0'.repeat(minorDigits)}`.slice(0, minorDigits));
 
   // Round half up on the digit just past the minor unit, rather than
   // truncating, so a badly-OCR'd "0.005" becomes 1 cent instead of vanishing.

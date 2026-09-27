@@ -211,7 +211,7 @@ The lines worth knowing:
 | `image preprocessed` | `cropped` and `keptFraction`. `cropped:false` means the crop bailed and accuracy will be lower |
 | `vision call complete` | `inputTokens` scales with image area — a jump usually means cropping stopped working, not longer receipts |
 | `receipt parsed` | `reconciled:false` means items don't match the printed subtotal |
-| `vision output outside supported currency list, defaulting` | The model named a currency `shared/currency.ts` doesn't know how to format; the bill fell back to SGD. Rare — worth a look if it's not |
+| `vision output outside supported currency list, defaulting` | The model named a currency `shared/currency.ts` doesn't know how to format; the bill fell back to SGD with a note asking the payer to check. Rare — worth a look if it's not |
 
 **Two deliberate omissions.** No message text, item names, or image bytes are ever
 logged — a log line is storage, and AnySplit promises receipts aren't stored. For
@@ -242,10 +242,11 @@ sets the counter back to the counted value.
 
 ### `/test` — exercising the flow without paying for a vision call
 
-`/test` runs nine canned receipts through the real `deriveBill()` logic — the
-whole flow, including the validation failure paths and two multi-currency cases
-(`tokyo`, a zero-decimal JPY receipt; `kl`, a two-decimal MYR one), with only the
-model call skipped. It is gated to the single Telegram id in `TEST_USER_ID`, and
+`/test` runs ten canned receipts through the real `deriveBill()` logic — the
+whole flow, including the validation failure paths and three multi-currency cases
+(`tokyo`, a zero-decimal JPY receipt; `kl`, a two-decimal MYR one; `unsure`, a
+CHF receipt outside the supported list, which trips the currency check), with
+only the model call skipped. It is gated to the single Telegram id in `TEST_USER_ID`, and
 an empty setting disables it, so an unconfigured deployment fails closed. Send
 `/test` with no argument for the menu.
 
