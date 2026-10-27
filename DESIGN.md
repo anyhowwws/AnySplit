@@ -311,12 +311,34 @@ never handles an image, so nothing about how photos are kept changes.
 |---|---|
 | At most 8 receipts | Each is a vision call, and the bill must stay well inside a 400KB item. Enforced in the same conditional write that adds one |
 | One currency per bill | Amounts in two currencies can't be summed, and converting needs the rate the payer's card actually used. Sending is refused until a misread currency is fixed or the receipt removed |
-| One payer for the whole bill | "Who's collecting" covers every receipt. Different people paying different receipts is a later step |
+| One payer per receipt | Different people can pay different receipts (see below); two cards on one receipt isn't covered |
 | Receipt ids are random after `r0` | So a parse still queued for a removed receipt can never land in a new one |
 | The last receipt can't be removed | A bill with nothing on it has nothing to split; it just expires |
 
 `/test` honours the marker too, so a multi-receipt bill can be put together
-from fixtures without a single vision call.
+from fixtures without a single vision call. The reply to the button carries a
+**Cancel**, which withdraws the marker — only if it still points at that bill,
+so it can't undo a later tap on another bill's button.
+
+### Several payers
+
+On a bill with several receipts the Summary asks **who paid** each one. Each
+receipt is still split on its own; then `settle` (`shared/settle.ts`) gives
+every person a balance — what they paid minus their share — and turns the
+balances into payments: repeatedly, whoever owes most pays whoever is owed
+most. The shares reconcile to the receipts' totals to the cent, so the
+balances sum to exactly zero and the payments clear them exactly.
+
+Dinner paid by Ann and drinks by Ben, shared three ways, settles as one
+payment from Cat to Ann, where two separate bills would need four. The cost of
+netting is that someone can be told to pay a person whose receipt they weren't
+on; every message keeps the per-receipt breakdown, so the amount can always be
+checked.
+
+A payer needn't be one of the people splitting — "someone else" is owed what
+they paid and owes nothing. With one payer for everything nothing changes: the
+messages read exactly as they did, and the client still sends a single
+`payee`. Phones stay transient, one per payer.
 
 ### The screens
 
@@ -356,6 +378,7 @@ architecturally is which fields are derived and which are decoration.
 | `adminId` | Telegram id of the payer. The only user allowed to read or mutate the bill |
 | `receipts` | Map of `receiptId` → receipt; fields below |
 | `shares` | Populated on finalise, and rewritten on every re-finalise. Each is a person's sum across every receipt, with `byReceipt` holding what it's made of |
+| `payers`, `paidBy` | Who paid, names only, and which of them paid each receipt. `payee` keeps the first, so a bill finalised before several payers existed reads the same way — `paymentOf` handles both |
 | `ttl` | Epoch seconds. Re-checked on read |
 | `note` | Why the first receipt's parse failed, when `status` is `error` |
 
@@ -749,7 +772,7 @@ specifically so they cannot drift from it.
 | Voice assignment | "Marcus had the ribeye and two beers" is the best version of this product. It needs the rest of it to work first |
 | PayNow QR | High value, and the point at which a bill splitter starts to look like it moves money. Deliberately deferred rather than dismissed |
 | Settling a foreign bill back in SGD | Needs the payer's actual card-charged SGD amount, which only they have — not a fetched FX rate, which would disagree with their card statement by construction. Deferred rather than built wrong |
-| A different payer for each receipt | Several receipts now make one split, but one person collects for all of them. Per-receipt payers need a who-owes-whom settlement on top — the next step, not forgotten |
+| Splitting one receipt between two payers | Two cards on one bill. One payer per receipt covers the night out; this would need amounts per payer, not just a name |
 | Receipts in several currencies on one bill | Summing them needs the payer's actual card rate (see above). Refused rather than converted wrong |
 
 ### Rate limiting

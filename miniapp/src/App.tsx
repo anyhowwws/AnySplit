@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Bill, Receipt, SendMode, Share, Unit } from '../../shared/types.ts';
 import { CalcError, computeBillShares } from '../../shared/calc.ts';
 import { DEFAULT_CURRENCY } from '../../shared/currency.ts';
-import { type Payee } from '../../shared/payee.ts';
 import { allUnits, receiptsOf, readyReceipts, splitBlocker } from '../../shared/receipts.ts';
 import { ApiRequestError, fetchBill, finaliseBill, patchBill, removeReceipt } from './lib/api.ts';
 import {
@@ -15,6 +14,7 @@ import {
   onBack,
   ownFirstName,
 } from './lib/telegram.ts';
+import { type PaymentDraft, buildPayment, draftFromBill, newDraft } from './lib/payment.ts';
 import { Banner, Centered } from './components/Chrome.tsx';
 import { Assign, type Assignment } from './screens/Assign.tsx';
 import { People } from './screens/People.tsx';
@@ -48,9 +48,11 @@ export function App() {
 
   const [names, setNames] = useState<string[]>([]);
   const [assignment, setAssignment] = useState<Assignment>({});
-  // Prefilled with the admin's own Telegram name — they paid it themselves
-  // most of the time, and it is trivially editable when they didn't.
-  const [payee, setPayee] = useState<Payee>(() => ({ name: ownFirstName(), phone: '' }));
+  // Who paid each receipt. Defaults to the admin's own Telegram name — they
+  // paid it themselves most of the time, and it is trivially editable when
+  // they didn't.
+  const ownName = useMemo(ownFirstName, []);
+  const [draft, setDraft] = useState<PaymentDraft>(() => newDraft(ownName));
 
   const receipts = useMemo(() => (bill ? receiptsOf(bill) : []), [bill]);
   const multi = receipts.length > 1;
@@ -107,15 +109,9 @@ export function App() {
         });
         setAssignment(restored);
 
-        // Name only — the phone was never stored, so it has to be retyped if
-        // they want it in the resent messages.
-        if (loaded.payee?.name) {
-          setPayee((current) => ({
-            ...current,
-            name: loaded.payee!.name,
-            personIndex: loaded.payee!.personIndex,
-          }));
-        }
+        // Names only — the phones were never stored, so they have to be
+        // retyped if they want them in the resent messages.
+        setDraft(draftFromBill(loaded, ownName));
 
         // Straight to the summary — unless a receipt was added after sending,
         // whose items nobody has been given yet. Then it's the start, so the
@@ -235,14 +231,13 @@ export function App() {
     if (!bill) return;
     setBusy(true);
     try {
-      // Resolve the payer's index if it wasn't chosen explicitly — the prefilled
-      // Telegram name often matches someone in the list.
-      const resolved =
-        payee.personIndex ??
-        people.findIndex((p) => p.name.trim().toLowerCase() === payee.name.trim().toLowerCase());
+      const payment = buildPayment(draft, names, splitting, ownName);
       await finaliseBill(bill.billId, {
         people,
-        payee: { ...payee, personIndex: resolved >= 0 ? resolved : undefined },
+        // One payer goes as `payee`, exactly as before there could be several.
+        ...(payment && payment.payers.length > 1
+          ? { payee: payment.payers[0], payers: payment.payers, paidBy: payment.paidBy }
+          : { payee: payment?.payers[0] }),
         mode,
       });
       haptic('success');
@@ -416,8 +411,9 @@ export function App() {
           shares={preview.shares}
           receipts={splitting}
           names={names}
-          payee={payee}
-          setPayee={setPayee}
+          draft={draft}
+          setDraft={setDraft}
+          ownName={ownName}
           alreadySent={bill.status === 'final'}
           onSend={(mode) => void send(mode)}
           busy={busy}

@@ -11,7 +11,8 @@ links to follow.
 
 A night with several bills becomes one split: **➕ Add another receipt** under
 a parsed receipt attaches the next photo to the same bill, up to eight, each
-grossed up by its own service charge and tax.
+grossed up by its own service charge and tax. When different people paid
+different receipts, the balances are netted into the fewest payments.
 
 Built for Singapore, where a receipt might stack 10% service charge and then 9%
 GST, or have neither — so both are read off the receipt rather than configured.

@@ -122,9 +122,15 @@ export interface Bill {
   note?: string;
   /**
    * Who to pay back — name only; see StoredPayee for why no phone number.
-   * Absent when the admin didn't specify one.
+   * Absent when the admin didn't specify one. When several people paid,
+   * the first of `payers`; read the whole picture through `paymentOf`
+   * (shared/settle.ts).
    */
   payee?: StoredPayee;
+  /** Everyone who paid a receipt — names only, as `payee`. Set on finalise. */
+  payers?: StoredPayee[];
+  /** receiptId -> index into `payers`: who paid each receipt. */
+  paidBy?: Record<string, number>;
 }
 
 /* ---------- Vision model output ---------- */
@@ -191,8 +197,18 @@ export type SendMode = 'personal' | 'group';
 /** POST /api/bills/:id/finalise */
 export interface FinaliseRequest {
   people: { name: string; unitIds: string[] }[];
-  /** Optional. Dropped silently if the name is blank. */
+  /**
+   * Optional. Dropped silently if the name is blank. With one payer for the
+   * whole bill this is all a client needs to send; superseded by `payers`.
+   */
   payee?: Payee;
+  /**
+   * Everyone who paid a receipt, when that's more than one person. Every
+   * name must be filled in, and no person may appear twice.
+   */
+  payers?: Payee[];
+  /** receiptId -> index into `payers`, for every receipt. Required with `payers`. */
+  paidBy?: Record<string, number>;
   /** Defaults to `personal` when absent. */
   mode?: SendMode;
 }

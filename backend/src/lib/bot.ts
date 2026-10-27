@@ -3,8 +3,18 @@ import type { InlineKeyboardMarkup } from 'grammy/types';
 import type { Bill, Receipt } from '../../../shared/types.ts';
 import { DEFAULT_CURRENCY } from '../../../shared/currency.ts';
 import { FIRST_RECEIPT_ID, MAX_RECEIPTS, receiptsOf } from '../../../shared/receipts.ts';
+import { paymentOf } from '../../../shared/settle.ts';
 import { config } from './config.ts';
-import { addReceipt, getBill, putBill, recordUse, setAttach, takeAttach, ttlFromNow } from './db.ts';
+import {
+  addReceipt,
+  cancelAttach,
+  getBill,
+  putBill,
+  recordUse,
+  setAttach,
+  takeAttach,
+  ttlFromNow,
+} from './db.ts';
 import {
   HELP_TEXT,
   START_TEXT,
@@ -67,6 +77,7 @@ export function registerHandlers(bot: Bot): void {
   });
 
   bot.callbackQuery(/^add:([A-Za-z0-9_-]{12})$/, handleAddReceipt);
+  bot.callbackQuery(/^cancel:([A-Za-z0-9_-]{12})$/, handleCancelAdd);
   // Anything else — a button from a deploy that no longer exists. Answer it so
   // the client stops spinning.
   bot.on('callback_query:data', (ctx) => ctx.answerCallbackQuery());
@@ -252,8 +263,29 @@ async function handleAddReceipt(ctx: Context): Promise<void> {
   await ctx.reply(
     `Send me receipt ${count + 1} and I'll add it to this bill. ` +
       'A photo sent more than 15 minutes from now starts a new bill instead.',
+    { reply_markup: { inline_keyboard: [[{ text: 'Cancel', callback_data: `cancel:${billId}` }]] } },
   );
   log.info('add receipt armed', { receipts: count });
+}
+
+/**
+ * Cancel, under "Send me receipt N": changed your mind, so the next photo
+ * should start a bill of its own after all. Edits the prompt rather than
+ * adding a message, so the chat shows what's actually pending.
+ */
+async function handleCancelAdd(ctx: Context): Promise<void> {
+  const billId = (ctx.match as RegExpMatchArray)[1]!;
+  addLogContext({ billId });
+  if (!ctx.from) return;
+
+  const cancelled = await cancelAttach(ctx.from.id, billId);
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    cancelled
+      ? 'Cancelled. The next photo you send starts a new bill.'
+      : 'Nothing to cancel: that receipt was already added, or the 15 minutes ran out.',
+  );
+  log.info('add receipt cancelled', { cancelled });
 }
 
 /**
@@ -399,9 +431,9 @@ async function showShare(ctx: Context, payload: string): Promise<void> {
   }
 
   log.info('share viewed');
-  // bill.payee carries no phone by design; the number lived only in the
+  // The stored payers carry no phone by design; the number lived only in the
   // forwarded message.
-  await ctx.reply(recipientBreakdown(bill, share, bill.payee), { parse_mode: 'HTML' });
+  await ctx.reply(recipientBreakdown(bill, share, paymentOf(bill)), { parse_mode: 'HTML' });
 }
 
 /** Used by the parser Lambda when a parse fails, so the wording lives in one place. */
