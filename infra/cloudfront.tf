@@ -6,8 +6,9 @@ resource "aws_cloudfront_origin_access_control" "miniapp" {
   signing_protocol                  = "sigv4"
 }
 
-# Managed policy: CachingOptimized. Hashed asset filenames from Vite make long
-# TTLs safe; index.html is invalidated on deploy.
+# Managed policy: CachingOptimized, which honours the origin's Cache-Control.
+# The deploy uploads Vite's hashed assets as immutable and everything else —
+# index.html — as no-cache, and invalidates index.html besides.
 data "aws_cloudfront_cache_policy" "optimized" {
   name = "Managed-CachingOptimized"
 }

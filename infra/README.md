@@ -120,7 +120,10 @@ Then deploy the Mini App, which needs the API URL from the outputs:
 ```bash
 cd ../miniapp
 VITE_API_BASE="$(terraform -chdir=../infra output -raw api_base_url)" npm run build
-aws s3 sync dist/ "s3://$(terraform -chdir=../infra output -raw miniapp_bucket)/" --delete
+MINIAPP_BUCKET="$(terraform -chdir=../infra output -raw miniapp_bucket)"
+# Same two uploads as CI: hashed assets cached for good, everything else no-cache.
+aws s3 sync dist/assets/ "s3://$MINIAPP_BUCKET/assets/" --delete --cache-control 'public, max-age=31536000, immutable'
+aws s3 sync dist/ "s3://$MINIAPP_BUCKET/" --delete --exclude 'assets/*' --cache-control 'no-cache'
 aws cloudfront create-invalidation \
   --distribution-id "$(terraform -chdir=../infra output -raw cloudfront_distribution_id)" \
   --paths '/index.html'
