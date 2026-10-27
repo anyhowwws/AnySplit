@@ -5,9 +5,10 @@ import {
   PutCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { Bill, BillStatus, Share, Unit } from '../../../shared/types.ts';
+import type { Bill, BillStatus, Receipt, Share, Unit } from '../../../shared/types.ts';
 import type { StoredPayee } from '../../../shared/payee.ts';
 import { DEFAULT_CURRENCY } from '../../../shared/currency.ts';
+import { FIRST_RECEIPT_ID } from '../../../shared/receipts.ts';
 import { config } from './config.ts';
 import { log } from './log.ts';
 import { userRef } from './userref.ts';
@@ -50,87 +51,100 @@ export async function getBill(billId: string): Promise<Bill | null> {
   const result = await client.send(
     new GetCommand({ TableName: config.tableName(), Key: { billId } }),
   );
-  const item = result.Item as Bill | undefined;
+  const item = result.Item as (Bill & Partial<LegacyBillBody>) | undefined;
   if (!item) return null;
   if (typeof item.ttl === 'number' && item.ttl <= now()) {
     log.info('bill read after ttl expiry, treating as absent', { billId, ttl: item.ttl });
     return null;
   }
-  // Bills written before multi-currency support have no `currency` field.
-  // They were always SGD — that was the only currency AnySplit understood —
-  // so defaulting here keeps them displaying correctly without a migration.
-  return item.currency ? item : { ...item, currency: DEFAULT_CURRENCY };
+  return item.receipts ? item : fromLegacy(item);
 }
 
-/** Overwrites the parsed body of a bill once the vision call returns. */
-export async function saveParse(
+/**
+ * The fields a bill carried at its top level before they moved into
+ * `receipts`. Only ever read, by `fromLegacy`; nothing writes them any more.
+ */
+interface LegacyBillBody {
+  merchant: string;
+  currency?: string;
+  subtotal: number;
+  total: number;
+  factor: number;
+  units: Unit[];
+  serviceCharge?: number;
+  gst?: number;
+  discount?: number;
+}
+
+/**
+ * Reads a bill written before receipts existed as a bill with one receipt.
+ *
+ * No migration: bills live 24 hours, so every such row is gone a day after
+ * this ships, and this — with the `job.receiptId` fallback in the parser — can
+ * go with them. Unit ids are kept as they were, because a final bill's shares
+ * refer to them.
+ *
+ * `note` meant both things on a legacy bill: why the parse failed, or what to
+ * check in a parse that landed. The first stays on the bill, the second
+ * belongs to the receipt.
+ */
+function fromLegacy(item: Bill & Partial<LegacyBillBody>): Bill {
+  const {
+    merchant, currency, subtotal, total, factor, units, serviceCharge, gst, discount, note,
+    ...rest
+  } = item;
+  const receipt: Receipt = {
+    receiptId: FIRST_RECEIPT_ID,
+    seq: 0,
+    merchant: merchant ?? '',
+    // Bills written before multi-currency support have no `currency` field.
+    // They were always SGD — that was the only currency AnySplit understood.
+    currency: currency || DEFAULT_CURRENCY,
+    subtotal: subtotal ?? 0,
+    total: total ?? 0,
+    factor: factor ?? 1,
+    units: units ?? [],
+    serviceCharge,
+    gst,
+    discount,
+    note: item.status === 'error' ? undefined : (note ?? undefined),
+  };
+  return {
+    ...rest,
+    receipts: { [FIRST_RECEIPT_ID]: receipt },
+    note: item.status === 'error' ? (note ?? undefined) : undefined,
+  };
+}
+
+/**
+ * Writes a bill's receipts, and optionally its status, in one update.
+ *
+ * The whole map, not `receipts.<id>`: a nested path can't be set on a legacy
+ * row that has no `receipts` attribute yet, and while a bill holds one receipt
+ * there is no sibling to overwrite. Once a bill can take several receipts in
+ * parallel this has to become a per-receipt write — safe by then, since the
+ * last legacy row will have expired.
+ */
+export async function saveReceipts(
   billId: string,
-  fields: {
-    merchant: string;
-    currency: string;
-    subtotal: number;
-    total: number;
-    factor: number;
-    units: Unit[];
-    serviceCharge: number;
-    gst: number;
-    discount: number;
-    status: BillStatus;
-    note?: string;
-  },
+  receipts: Record<string, Receipt>,
+  status?: BillStatus,
 ): Promise<void> {
   await client.send(
     new UpdateCommand({
       TableName: config.tableName(),
       Key: { billId },
+      // The REMOVE tidies a legacy row's old top-level body on its first save,
+      // so a stale copy can't sit beside the real one. A no-op on any other row.
       UpdateExpression:
-        'SET merchant = :m, currency = :cur, subtotal = :s, #total = :t, factor = :f, units = :u, ' +
-        'serviceCharge = :sc, gst = :g, discount = :d, #status = :st, note = :n',
-      ExpressionAttributeNames: { '#status': 'status', '#total': 'total' },
-      ExpressionAttributeValues: {
-        ':m': fields.merchant,
-        ':cur': fields.currency,
-        ':s': fields.subtotal,
-        ':t': fields.total,
-        ':f': fields.factor,
-        ':u': fields.units,
-        ':sc': fields.serviceCharge,
-        ':g': fields.gst,
-        ':d': fields.discount,
-        ':st': fields.status,
-        ':n': fields.note ?? null,
+        (status ? 'SET #receipts = :r, #status = :st ' : 'SET #receipts = :r ') +
+        'REMOVE merchant, currency, subtotal, #total, factor, units, serviceCharge, gst, discount',
+      ExpressionAttributeNames: {
+        '#receipts': 'receipts',
+        '#total': 'total',
+        ...(status ? { '#status': 'status' } : {}),
       },
-    }),
-  );
-}
-
-/** Admin corrections from the Review screen. */
-export async function saveEdits(
-  billId: string,
-  fields: {
-    merchant: string;
-    currency: string;
-    subtotal: number;
-    total: number;
-    factor: number;
-    units: Unit[];
-  },
-): Promise<void> {
-  await client.send(
-    new UpdateCommand({
-      TableName: config.tableName(),
-      Key: { billId },
-      UpdateExpression:
-        'SET merchant = :m, currency = :cur, subtotal = :s, #total = :t, factor = :f, units = :u',
-      ExpressionAttributeNames: { '#total': 'total' },
-      ExpressionAttributeValues: {
-        ':m': fields.merchant,
-        ':cur': fields.currency,
-        ':s': fields.subtotal,
-        ':t': fields.total,
-        ':f': fields.factor,
-        ':u': fields.units,
-      },
+      ExpressionAttributeValues: status ? { ':r': receipts, ':st': status } : { ':r': receipts },
     }),
   );
 }

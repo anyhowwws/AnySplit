@@ -1,30 +1,20 @@
-import type { ParsedReceipt, Unit } from '../../../shared/types.ts';
+import type { ParsedReceipt, Receipt } from '../../../shared/types.ts';
 import { deriveFactor, expandUnits, reconcilesToSubtotal, subtotalOf, summaryDelta } from './calc.ts';
 import { moneyFormatter } from './money.ts';
 
 /**
- * Turns a parsed receipt into the fields a bill stores.
+ * Turns a parsed receipt into the receipt a bill stores.
  *
  * Extracted so the parser Lambda and the /test fixtures share one
  * implementation. A mock that computed its own totals would drift from the real
  * thing and quietly stop being a useful test.
  */
-export interface DerivedBill {
-  merchant: string;
-  currency: string;
-  subtotal: number;
-  total: number;
-  factor: number;
-  units: Unit[];
-  serviceCharge: number;
-  gst: number;
-  discount: number;
-  /** Warning text when any validation gate trips; undefined when all pass. */
-  note?: string;
-}
-
-export function deriveBill(receipt: ParsedReceipt): DerivedBill {
-  const units = expandUnits(receipt);
+export function deriveReceipt(
+  receipt: ParsedReceipt,
+  receiptId: string,
+  seq: number,
+): Receipt {
+  const units = expandUnits(receipt, receiptId);
 
   // The subtotal we store is the sum of the units we're actually going to
   // distribute — not the receipt's printed subtotal. factor must be relative to
@@ -70,6 +60,8 @@ export function deriveBill(receipt: ParsedReceipt): DerivedBill {
   }
 
   return {
+    receiptId,
+    seq,
     merchant: receipt.merchant,
     currency: receipt.currency,
     subtotal,

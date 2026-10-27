@@ -8,21 +8,23 @@ import type {
   FinaliseResponse,
   GetBillResponse,
   PatchBillRequest,
+  Receipt,
   SendMode,
   Share,
   Unit,
 } from '../../../shared/types.ts';
 import { registerHandlers } from '../lib/bot.ts';
-import { CalcError, computeShares, deriveFactor, subtotalOf, unassignedCents } from '../lib/calc.ts';
+import { CalcError, computeBillShares, deriveFactor, subtotalOf, unassignedCents } from '../lib/calc.ts';
 import { MAX_PEOPLE, MIN_PEOPLE } from '../lib/config.ts';
 import { botToken, webhookSecret } from '../lib/secrets.ts';
-import { claimUpdate, getBill, saveEdits, saveShares } from '../lib/db.ts';
+import { claimUpdate, getBill, saveReceipts, saveShares } from '../lib/db.ts';
 import { consolidatedMessage, shareMessage } from '../lib/format.ts';
 import { isBillId } from '../lib/ids.ts';
 import { addLogContext, consumeColdStart, errorFields, log, withLogContext } from '../lib/log.ts';
 import { formatMoney, isCents } from '../lib/money.ts';
 import { isSupportedCurrency } from '../../../shared/currency.ts';
 import { cleanPayee, toStoredPayee } from '../../../shared/payee.ts';
+import { allUnits, receiptsOf } from '../../../shared/receipts.ts';
 import { initDataFromAuthHeader, verifyInitData } from '../lib/initdata.ts';
 import { getBot } from '../lib/telegram.ts';
 import { userRef } from '../lib/userref.ts';
@@ -194,25 +196,51 @@ app.patch('/api/bills/:id', async (c) => {
     return c.json({ error: 'invalid body' }, 400);
   }
 
-  const units = body.units === undefined ? bill.units : validateUnits(body.units);
+  // Naming the receipt is optional only while there's no ambiguity about which.
+  const receipts = receiptsOf(bill);
+  const receipt =
+    body.receiptId === undefined
+      ? receipts.length === 1
+        ? receipts[0]
+        : undefined
+      : bill.receipts[body.receiptId];
+  if (!receipt) return c.json({ error: 'unknown receipt' }, 400);
+
+  const units = body.units === undefined ? receipt.units : validateUnits(body.units);
   if (units === null) return c.json({ error: 'invalid units' }, 400);
 
-  const total = body.total === undefined ? bill.total : body.total;
+  // Unit ids are unique across the bill, not just the receipt — the
+  // assignment and the shares identify units by id alone.
+  const elsewhere = new Set(
+    receipts.filter((r) => r.receiptId !== receipt.receiptId).flatMap((r) => r.units.map((u) => u.id)),
+  );
+  if (units.some((unit) => elsewhere.has(unit.id))) return c.json({ error: 'invalid units' }, 400);
+
+  const total = body.total === undefined ? receipt.total : body.total;
   if (!isCents(total) || total <= 0) return c.json({ error: 'invalid total' }, 400);
 
-  const merchant = body.merchant === undefined ? bill.merchant : body.merchant.slice(0, 120);
+  const merchant = body.merchant === undefined ? receipt.merchant : body.merchant.slice(0, 120);
 
-  const currency = body.currency === undefined ? bill.currency : body.currency;
+  const currency = body.currency === undefined ? receipt.currency : body.currency;
   if (!isSupportedCurrency(currency)) return c.json({ error: 'invalid currency' }, 400);
 
   // subtotal and factor are always derived, never accepted from the client.
   const subtotal = subtotalOf(units);
   const factor = deriveFactor(subtotal, total);
 
-  await saveEdits(bill.billId, { merchant, currency, subtotal, total, factor, units });
-  log.info('bill edited', { billId: bill.billId, currency, subtotal, total, factor });
+  const edited: Receipt = { ...receipt, merchant, currency, subtotal, total, factor, units };
+  const updatedReceipts = { ...bill.receipts, [receipt.receiptId]: edited };
+  await saveReceipts(bill.billId, updatedReceipts);
+  log.info('bill edited', {
+    billId: bill.billId,
+    receiptId: receipt.receiptId,
+    currency,
+    subtotal,
+    total,
+    factor,
+  });
 
-  const updated: Bill = { ...bill, merchant, currency, subtotal, total, factor, units };
+  const updated: Bill = { ...bill, receipts: updatedReceipts };
   return c.json({ bill: updated } satisfies { bill: Bill });
 });
 
@@ -232,20 +260,24 @@ app.post('/api/bills/:id/finalise', async (c) => {
     return c.json({ error: 'invalid body' }, 400);
   }
 
-  const people = validatePeople(body.people, bill.units);
+  const receipts = receiptsOf(bill);
+  const units = allUnits(bill);
+  const people = validatePeople(body.people, units);
   if (typeof people === 'string') return c.json({ error: people }, 400);
 
   // Belt and braces: computeShares refuses to reconcile with unclaimed units, but
   // a dedicated check gives a message worth showing a person.
   const claimed = new Set(people.flatMap((person) => person.unitIds));
-  const unclaimed = bill.units.filter((unit) => !claimed.has(unit.id));
+  const unclaimed = units.filter((unit) => !claimed.has(unit.id));
   if (unclaimed.length > 0) {
-    const outstanding = unassignedCents(bill.units, people);
+    // Summing cents across receipts is only meaningful in one currency, so a
+    // bill's receipts must all share one — the first receipt's speaks for all.
+    const outstanding = unassignedCents(units, people);
     return c.json(
       {
         error:
           `${unclaimed.length} item${unclaimed.length === 1 ? '' : 's'} ` +
-          `(${formatMoney(outstanding, bill.currency)}) still need assigning`,
+          `(${formatMoney(outstanding, receipts[0]!.currency)}) still need assigning`,
       },
       400,
     );
@@ -253,7 +285,7 @@ app.post('/api/bills/:id/finalise', async (c) => {
 
   let shares: Share[];
   try {
-    shares = computeShares(bill.units, bill.factor, bill.total, people);
+    shares = computeBillShares(receipts, people);
   } catch (err) {
     if (err instanceof CalcError) return c.json({ error: err.message }, 400);
     throw err;
@@ -279,7 +311,8 @@ app.post('/api/bills/:id/finalise', async (c) => {
   await saveShares(bill.billId, shares, toStoredPayee(payee));
   log.info('bill finalised', {
     people: shares.length,
-    total: bill.total,
+    receipts: receipts.length,
+    total: receipts.reduce((sum, r) => sum + r.total, 0),
     sum: shares.reduce((a, s) => a + s.cents, 0),
     // Whether one was given, never the number itself — it is someone's personal
     // contact detail, and at 14 days the logs outlive the bill's 24 hours.

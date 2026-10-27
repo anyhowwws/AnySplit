@@ -6,6 +6,7 @@
  */
 export {
   CalcError,
+  computeBillShares,
   computeShares,
   deriveFactor,
   expandUnits,

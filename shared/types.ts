@@ -41,11 +41,17 @@ export interface Share {
   cents: number;
 }
 
-export interface Bill {
-  /** 12-char base64url id. e.g. "aK9x2mQp7Lz4". */
-  billId: string;
-  /** Telegram user_id of the payer. The only user allowed to mutate this bill. */
-  adminId: number;
+/**
+ * One photographed receipt. A bill holds one or more of these, and each is
+ * split on its own before the results are summed per person — service charge
+ * and tax don't stack the same way on every receipt, so pooling their items
+ * under one `factor` would overcharge some people and undercharge others.
+ */
+export interface Receipt {
+  /** Stable id, unique within the bill. e.g. "r0". Prefixes its units' ids. */
+  receiptId: string;
+  /** Display order: the order the photos arrived in. */
+  seq: number;
   merchant: string;
   /**
    * ISO 4217 code, e.g. "SGD", "JPY". Always present — defaults to "SGD" for
@@ -53,7 +59,7 @@ export interface Bill {
    * written before the vision call has read anything.
    */
   currency: string;
-  /** Sum of all units, in cents (the bill's currency's minor unit; see money.ts). */
+  /** Sum of all units, in cents (the receipt's currency's minor unit; see money.ts). */
   subtotal: number;
   /** Amount actually payable, in cents. Includes service charge and GST. */
   total: number;
@@ -63,18 +69,34 @@ export interface Bill {
    * hawker receipts with neither, and flat discounts, with zero branching.
    */
   factor: number;
-  status: BillStatus;
   units: Unit[];
-  shares: Share[];
-  /** Unix epoch SECONDS. Re-checked on read; expired items are treated absent. */
-  ttl: number;
   /** Service charge in cents, as printed. Informational only. */
   serviceCharge?: number;
   /** GST in cents, as printed. Informational only. */
   gst?: number;
   /** Discount in cents, as printed, positive. Already deducted from `total`. */
   discount?: number;
-  /** Human-readable note surfaced in the UI (parse warnings, errors). */
+  /** Parse warnings for this receipt, surfaced on the Review screen. */
+  note?: string;
+}
+
+export interface Bill {
+  /** 12-char base64url id. e.g. "aK9x2mQp7Lz4". */
+  billId: string;
+  /** Telegram user_id of the payer. The only user allowed to mutate this bill. */
+  adminId: number;
+  /**
+   * Keyed by receiptId. A map rather than a list so that, once a bill can
+   * hold several receipts, each parse can write its own entry without
+   * overwriting a sibling that finished at the same moment. Read through
+   * `receiptsOf` (shared/receipts.ts) for display order.
+   */
+  receipts: Record<string, Receipt>;
+  status: BillStatus;
+  shares: Share[];
+  /** Unix epoch SECONDS. Re-checked on read; expired items are treated absent. */
+  ttl: number;
+  /** Why the parse failed, when `status` is `error`. */
   note?: string;
   /**
    * Who to pay back — name only; see StoredPayee for why no phone number.
@@ -122,8 +144,13 @@ export interface GetBillResponse {
   botUsername: string;
 }
 
-/** PATCH /api/bills/:id — all fields optional; only what changed is sent. */
+/**
+ * PATCH /api/bills/:id — edits one receipt. All fields optional; only what
+ * changed is sent.
+ */
 export interface PatchBillRequest {
+  /** Which receipt. May be omitted while the bill has exactly one. */
+  receiptId?: string;
   merchant?: string;
   /** ISO 4217 code. Must be one of shared/currency.ts's supported list. */
   currency?: string;

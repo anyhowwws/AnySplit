@@ -4,7 +4,7 @@ import type { ParsedItem, ParsedReceipt } from '../../../shared/types.ts';
  * Canned receipts for /test, so the whole flow can be exercised without sending
  * a photo — and therefore without paying for a vision call on every iteration.
  *
- * These are fed through the same `deriveBill` the parser uses, so they exercise
+ * These are fed through the same `deriveReceipt` the parser uses, so they exercise
  * the real expansion, factor derivation, and both validation gates. Only the
  * model call is skipped.
  *
