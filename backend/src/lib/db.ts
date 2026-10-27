@@ -7,7 +7,7 @@ import {
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import type { Bill, BillStatus, Receipt, Share, Unit } from '../../../shared/types.ts';
-import type { StoredPayee } from '../../../shared/payee.ts';
+import type { Payment } from '../../../shared/settle.ts';
 import { DEFAULT_CURRENCY } from '../../../shared/currency.ts';
 import { FIRST_RECEIPT_ID } from '../../../shared/receipts.ts';
 import { config } from './config.ts';
@@ -327,23 +327,38 @@ export async function takeAttach(userId: number): Promise<string | null> {
   return item.target;
 }
 
+/**
+ * Stores a finalised split. `payment` must already be phone-free — see
+ * toStoredPayee — and is null when nobody was named as having paid.
+ *
+ * `payee` keeps holding the first payer, so a bill read by code that only
+ * knows about one payer still names somebody sensible.
+ */
 export async function saveShares(
   billId: string,
   shares: Share[],
-  payee: StoredPayee | null,
+  payment: Payment | null,
 ): Promise<void> {
   await client.send(
     new UpdateCommand({
       TableName: config.tableName(),
       Key: { billId },
-      UpdateExpression: 'SET shares = :sh, #status = :st, payee = :p, #ttl = :ttl',
-      ExpressionAttributeNames: { '#status': 'status', '#ttl': 'ttl' },
+      UpdateExpression:
+        'SET shares = :sh, #status = :st, payee = :p, #payers = :ps, #paidBy = :pb, #ttl = :ttl',
+      ExpressionAttributeNames: {
+        '#status': 'status',
+        '#ttl': 'ttl',
+        '#payers': 'payers',
+        '#paidBy': 'paidBy',
+      },
       ExpressionAttributeValues: {
         ':sh': shares,
         ':st': 'final' satisfies BillStatus,
         // Null rather than undefined: an explicit absence is easier to read back
         // than a missing attribute, and removeUndefinedValues would drop it.
-        ':p': payee,
+        ':p': payment?.payers[0] ?? null,
+        ':ps': payment?.payers ?? null,
+        ':pb': payment?.paidBy ?? null,
         // Restart the retention clock rather than deleting outright. Sending is
         // not the end of the story: an admin may want the other format, or spot
         // that the split is wrong, and a bill that vanished the instant it was
@@ -353,6 +368,30 @@ export async function saveShares(
       },
     }),
   );
+}
+
+/**
+ * Withdraws a marker before any photo uses it — the Cancel button. Only the
+ * marker for `billId`: a later tap on another bill's button has replaced it,
+ * and cancelling this one mustn't undo that. False when there was nothing to
+ * cancel: already used, replaced, or expired.
+ */
+export async function cancelAttach(userId: number, billId: string): Promise<boolean> {
+  try {
+    await client.send(
+      new DeleteCommand({
+        TableName: config.tableName(),
+        Key: { billId: `att#${userId}` },
+        ConditionExpression: '#target = :bill AND #ttl > :now',
+        ExpressionAttributeNames: { '#target': 'target', '#ttl': 'ttl' },
+        ExpressionAttributeValues: { ':bill': billId, ':now': now() },
+      }),
+    );
+    return true;
+  } catch (err) {
+    if (conditionFailed(err)) return false;
+    throw err;
+  }
 }
 
 /**

@@ -1,5 +1,6 @@
 import type { Bill, Receipt, Share, Unit } from '../../../shared/types.ts';
 import { MAX_RECEIPTS, allUnits, receiptsOf } from '../../../shared/receipts.ts';
+import { type Payment, type Settlement, settle } from '../../../shared/settle.ts';
 import { moneyFormatter } from './money.ts';
 import { currencyInfo } from '../../../shared/currency.ts';
 // Type-only: this module stays pure presentation, with no path from here to
@@ -108,10 +109,10 @@ export function shareMessage(
   bill: Bill,
   share: Share,
   botUsername: string,
-  payee?: PayeeLike,
+  payment?: Payment<PayeeLike>,
 ): string {
   return [
-    recipientBreakdown(bill, share, payee),
+    recipientBreakdown(bill, share, payment),
     '',
     `<i>via @${esc(botUsername)}</i>`,
   ].join('\n');
@@ -123,6 +124,38 @@ export function shareMessage(
  * database (name only, because that is all that was kept).
  */
 type PayeeLike = { name: string; phone?: string; personIndex?: number };
+
+/**
+ * With one payer, the messages read exactly as they always have — that payer
+ * as `payee`. With several, who pays whom comes from the settlement instead.
+ */
+function paymentView(
+  shares: Share[],
+  receipts: Receipt[],
+  payment?: Payment<PayeeLike>,
+): { payee?: PayeeLike; settlement?: Settlement; paidByName?: (receipt: Receipt) => string } {
+  if (!payment || payment.payers.length <= 1) return { payee: payment?.payers[0] };
+  return {
+    settlement: settle(shares, receipts, payment),
+    paidByName: (receipt) => payment.payers[payment.paidBy[receipt.receiptId]!]?.name ?? '',
+  };
+}
+
+/** " <i>(Ann paid)</i>" after a receipt's heading, when payers differ. */
+function paidByNote(receipt: Receipt, paidByName?: (receipt: Receipt) => string): string {
+  return paidByName ? ` <i>(${esc(paidByName(receipt))} paid)</i>` : '';
+}
+
+/** "Pay Ann $60.00 — 9123 4567": the phone only exists on the first render. */
+function payLine(to: string, cents: string, phone?: string): string {
+  return `Pay <b>${esc(to)}</b> ${cents}` + (phone ? ` — <code>${esc(phone)}</code>` : '');
+}
+
+/** The phone of whoever a settlement party is, if they paid and gave one. */
+function phoneOf(settlement: Settlement, party: number, payment?: Payment<PayeeLike>): string {
+  const payerIndex = settlement.parties[party]?.payerIndex;
+  return payerIndex === undefined ? '' : (payment?.payers[payerIndex]?.phone ?? '');
+}
 
 /**
  * Telegram rejects anything over 4096 characters. Stay under it with room to
@@ -142,18 +175,22 @@ export function consolidatedMessage(
   bill: Bill,
   shares: Share[],
   botUsername: string,
-  payee?: PayeeLike,
+  payment?: Payment<PayeeLike>,
 ): string {
   const receipts = receiptsOf(bill);
   const multi = receipts.length > 1;
   // Finalise refuses a bill whose receipts disagree on currency.
   const money = moneyFormatter(receipts[0]!.currency);
+  const { payee, settlement, paidByName } = paymentView(shares, receipts, payment);
 
   /** `maxItems: Infinity` lists everything; a number truncates with "+N more". */
   const build = (maxItems: number): string => {
     const lines: string[] = [];
     for (const receipt of receipts) {
-      lines.push(`🧾 <b>${esc(receipt.merchant || MERCHANT_FALLBACK)}</b> — ${money(receipt.total)}`);
+      lines.push(
+        `🧾 <b>${esc(receipt.merchant || MERCHANT_FALLBACK)}</b> — ${money(receipt.total)}` +
+          paidByNote(receipt, paidByName),
+      );
     }
     if (multi) lines.push(`<b>Total: ${money(billTotal(bill))}</b>`);
     lines.push('');
@@ -182,7 +219,24 @@ export function consolidatedMessage(
       lines.push(...explanations);
     }
 
-    if (payee?.name) {
+    if (settlement) {
+      // Several people paid: the payments that square everyone up, in one
+      // list everyone in the chat can find their own line in.
+      lines.push('');
+      if (settlement.transfers.length === 0) {
+        lines.push("Everyone's square.");
+      } else {
+        lines.push('<b>To settle up</b>');
+        for (const transfer of settlement.transfers) {
+          const phone = phoneOf(settlement, transfer.to, payment);
+          lines.push(
+            `${esc(settlement.parties[transfer.from]!.name)} → ` +
+              `<b>${esc(settlement.parties[transfer.to]!.name)}</b> ${money(transfer.cents)}` +
+              (phone ? ` — <code>${esc(phone)}</code>` : ''),
+          );
+        }
+      }
+    } else if (payee?.name) {
       lines.push('');
       lines.push(
         payee.phone
@@ -230,13 +284,20 @@ function itemLabels(bill: Bill, share: Share, max: number): string[] {
 }
 
 /** What one person sees: their own items, their own total, and who to pay. */
-export function recipientBreakdown(bill: Bill, share: Share, payee?: PayeeLike): string {
-  // The person who fronted the money gets a different message. Telling them they
+export function recipientBreakdown(
+  bill: Bill,
+  share: Share,
+  payment?: Payment<PayeeLike>,
+): string {
+  const receipts = receiptsOf(bill);
+  const { payee, settlement, paidByName } = paymentView(bill.shares, receipts, payment);
+  // Anyone who fronted money gets a different message. Telling them they
   // "owe" their own share and instructing them to pay themselves is nonsense —
   // they have already paid, and what they actually want to know is what the meal
   // cost them and how much is coming back.
-  const isPayer = payee?.personIndex !== undefined && payee.personIndex === share.idx;
-  const receipts = receiptsOf(bill);
+  const isPayer = settlement
+    ? settlement.paid[share.idx]! > 0
+    : payee?.personIndex !== undefined && payee.personIndex === share.idx;
   const money = moneyFormatter(receipts[0]!.currency);
   const claimCount = countClaims(bill);
   const mine = new Set(share.unitIds);
@@ -278,7 +339,8 @@ export function recipientBreakdown(bill: Bill, share: Share, payee?: PayeeLike):
       lines.push('');
       lines.push(
         `<b>${esc(receipt.merchant || MERCHANT_FALLBACK)}</b>` +
-          (subtotal === undefined ? '' : ` — ${money(subtotal)}`),
+          (subtotal === undefined ? '' : ` — ${money(subtotal)}`) +
+          paidByNote(receipt, paidByName),
       );
       lines.push(...groupUnitsWithSharing(orderedAs(units, share.unitIds), claimCount, money));
       const phrase = chargePhrase(receipt, 'receipt');
@@ -289,7 +351,9 @@ export function recipientBreakdown(bill: Bill, share: Share, payee?: PayeeLike):
   // The actionable part, so it goes last where the eye lands. The phone only
   // exists on the first render — the forwarded message is the sole place it
   // ever appears, which is exactly why it needn't be stored.
-  if (isPayer) {
+  if (settlement) {
+    lines.push(...settlementLines(settlement, share.idx, money, payment));
+  } else if (isPayer) {
     // Their own copy: what they put in, and what should come back.
     const paid = billTotal(bill);
     const owedBack = paid - share.cents;
@@ -309,6 +373,41 @@ export function recipientBreakdown(bill: Bill, share: Share, payee?: PayeeLike):
   }
 
   return lines.join('\n');
+}
+
+/**
+ * One person's part of a several-payer settlement: what they paid and what
+ * comes back, or who they pay, or that they're square.
+ */
+function settlementLines(
+  settlement: Settlement,
+  me: number,
+  money: (cents: number) => string,
+  payment?: Payment<PayeeLike>,
+): string[] {
+  const paid = settlement.paid[me]!;
+  const paying = settlement.transfers.filter((t) => t.from === me);
+  const receiving = settlement.transfers.filter((t) => t.to === me);
+  const owed = receiving.reduce((sum, t) => sum + t.cents, 0);
+  const owe = paying.reduce((sum, t) => sum + t.cents, 0);
+  const name = (party: number) => settlement.parties[party]!.name;
+
+  const lines: string[] = [''];
+  if (paid > 0) {
+    lines.push(
+      owed > 0
+        ? `You paid ${money(paid)}, so you're owed ${money(owed)} back:`
+        : owe > 0
+          ? `You paid ${money(paid)}, and still owe ${money(owe)}:`
+          : `You paid ${money(paid)}, so you're all square.`,
+    );
+    for (const t of receiving) lines.push(`<b>${esc(name(t.from))}</b> pays you ${money(t.cents)}`);
+  }
+  for (const t of paying) {
+    lines.push(payLine(name(t.to), money(t.cents), phoneOf(settlement, t.to, payment)));
+  }
+  // Paid nothing and owes nothing — a share of zero. Nothing to add.
+  return lines.length > 1 ? lines : [];
 }
 
 function groupUnitsWithSharing(
@@ -531,7 +630,8 @@ export const HELP_TEXT = [
   '',
   'A night with several bills? Tap <b>➕ Add another receipt</b> under the first one and ' +
     `send the next photo — up to ${MAX_RECEIPTS} receipts become one split, each with its own ` +
-    'service charge and GST.',
+    'service charge and GST. If different people paid different receipts, pick who paid ' +
+    'each on the last screen and I work out who pays whom.',
   '',
   'Tax and service charge are taken from the receipt itself, so hawker stalls, ' +
     'GST-only venues, and full-service restaurants all work without settings.',

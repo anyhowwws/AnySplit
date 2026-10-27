@@ -23,7 +23,8 @@ import { isBillId } from '../lib/ids.ts';
 import { addLogContext, consumeColdStart, errorFields, log, withLogContext } from '../lib/log.ts';
 import { formatMoney, isCents } from '../lib/money.ts';
 import { isSupportedCurrency } from '../../../shared/currency.ts';
-import { cleanPayee, toStoredPayee } from '../../../shared/payee.ts';
+import { type Payee, cleanPayee, toStoredPayee } from '../../../shared/payee.ts';
+import { type Payment, SettleError, settle } from '../../../shared/settle.ts';
 import { allUnits, receiptsOf, splitBlocker, statusOf } from '../../../shared/receipts.ts';
 import { initDataFromAuthHeader, verifyInitData } from '../lib/initdata.ts';
 import { getBot } from '../lib/telegram.ts';
@@ -319,24 +320,28 @@ app.post('/api/bills/:id/finalise', async (c) => {
     throw err;
   }
 
-  // Never trusted from the client as-is: name is trimmed and capped, phone is
-  // normalised or dropped. A blank name means "no payee", not an error.
-  const rawPayee = cleanPayee(body.payee);
+  const payment = validatePayment(body, receipts, people.length);
+  if (typeof payment === 'string') return c.json({ error: payment }, 400);
 
-  // An out-of-range index would silently mark the wrong person as the payer, so
-  // drop it rather than guess. The name survives either way.
-  const payee =
-    rawPayee && rawPayee.personIndex !== undefined && rawPayee.personIndex >= people.length
-      ? { ...rawPayee, personIndex: undefined }
-      : rawPayee;
+  let transfers: number;
+  try {
+    transfers = payment ? settle(shares, receipts, payment).transfers.length : 0;
+  } catch (err) {
+    if (err instanceof SettleError) return c.json({ error: err.message }, 400);
+    throw err;
+  }
 
   // Anything but an explicit 'group' means per-person, so a client that doesn't
   // send the field keeps the original behaviour.
   const mode: SendMode = body.mode === 'group' ? 'group' : 'personal';
 
-  // Phone stripped here — toStoredPayee is the only way payee data reaches the
+  // Phones stripped here — toStoredPayee is the only way payee data reaches the
   // database, and it has no field for one.
-  await saveShares(bill.billId, shares, toStoredPayee(payee));
+  const stored: Payment | null = payment && {
+    payers: payment.payers.map((payer) => toStoredPayee(payer)!),
+    paidBy: payment.paidBy,
+  };
+  await saveShares(bill.billId, shares, stored);
   log.info('bill finalised', {
     people: shares.length,
     receipts: receipts.length,
@@ -345,8 +350,9 @@ app.post('/api/bills/:id/finalise', async (c) => {
     // Whether one was given, never the number itself — it is someone's personal
     // contact detail, and at 14 days the logs outlive the bill's 24 hours.
     mode,
-    hasPayee: payee !== null,
-    hasPayeePhone: Boolean(payee?.phone),
+    payers: payment?.payers.length ?? 0,
+    transfers,
+    payerPhones: payment?.payers.filter((payer) => payer.phone).length ?? 0,
   });
 
   // One forwardable message per person, DM'd to the admin.
@@ -355,9 +361,11 @@ app.post('/api/bills/:id/finalise', async (c) => {
     ...bill,
     shares,
     status: 'final',
-    payee: toStoredPayee(payee) ?? undefined,
+    payee: stored?.payers[0],
+    payers: stored?.payers,
+    paidBy: stored?.paidBy,
   };
-  // `payee` (not finalBill.payee) throughout, so the phone reaches the messages
+  // `payment` (not finalBill's) throughout, so the phones reach the messages
   // the admin forwards without ever being written down.
   let allSent = true;
 
@@ -377,13 +385,13 @@ app.post('/api/bills/:id/finalise', async (c) => {
 
   if (mode === 'group') {
     await send(
-      consolidatedMessage(finalBill, shares, bot.botInfo.username, payee ?? undefined),
+      consolidatedMessage(finalBill, shares, bot.botInfo.username, payment ?? undefined),
       'consolidated',
     );
   } else {
     for (const share of shares) {
       await send(
-        shareMessage(finalBill, share, bot.botInfo.username, payee ?? undefined),
+        shareMessage(finalBill, share, bot.botInfo.username, payment ?? undefined),
         `share-${share.idx}`,
       );
     }
@@ -441,6 +449,68 @@ function validateUnits(input: unknown): Unit[] | null {
   }
 
   return units;
+}
+
+/**
+ * Who paid for what, from the finalise body, or null when nobody was named,
+ * or an error string suitable for the client.
+ *
+ * Never trusted as sent: names are trimmed and capped, phones normalised or
+ * dropped, and a person index outside the people list is dropped rather than
+ * guessed at — it would mark the wrong person as having paid. The name
+ * survives either way.
+ *
+ * A client that only knows one payer sends `payee`, which is read as having
+ * paid every receipt; a blank name there means "no payee", not an error.
+ * With `payers`, every name is required, since each is somebody to pay.
+ */
+function validatePayment(
+  body: FinaliseRequest,
+  receipts: Receipt[],
+  peopleCount: number,
+): Payment<Payee> | null | string {
+  const inRange = (payer: Payee): Payee =>
+    payer.personIndex !== undefined && payer.personIndex >= peopleCount
+      ? { ...payer, personIndex: undefined }
+      : payer;
+
+  if (!Array.isArray(body.payers) || body.payers.length === 0) {
+    const payee = cleanPayee(body.payee);
+    if (!payee) return null;
+    return {
+      payers: [inRange(payee)],
+      paidBy: Object.fromEntries(receipts.map((receipt) => [receipt.receiptId, 0])),
+    };
+  }
+
+  if (body.payers.length > receipts.length) return 'more payers than receipts';
+  const payers: Payee[] = [];
+  for (const raw of body.payers) {
+    const payer = cleanPayee(raw);
+    if (!payer) return 'every payer needs a name';
+    payers.push(inRange(payer));
+  }
+  const people = payers.flatMap((payer) => (payer.personIndex === undefined ? [] : [payer.personIndex]));
+  if (new Set(people).size !== people.length) return 'someone is listed as a payer twice';
+
+  const raw = typeof body.paidBy === 'object' && body.paidBy !== null ? body.paidBy : {};
+  const paidBy: Record<string, number> = {};
+  for (const receipt of receipts) {
+    const index = (raw as Record<string, unknown>)[receipt.receiptId];
+    if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= payers.length) {
+      return 'say who paid each receipt';
+    }
+    paidBy[receipt.receiptId] = index;
+  }
+
+  // A payer who paid nothing has nothing to collect; drop them and renumber,
+  // so every stored payer appears in paidBy.
+  const used = [...new Set(Object.values(paidBy))].sort((a, b) => a - b);
+  const renumber = new Map(used.map((old, i) => [old, i]));
+  return {
+    payers: used.map((old) => payers[old]!),
+    paidBy: Object.fromEntries(Object.entries(paidBy).map(([id, old]) => [id, renumber.get(old)!])),
+  };
 }
 
 /** Returns the assignments, or an error string suitable for the client. */
