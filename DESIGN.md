@@ -168,7 +168,7 @@ flowchart LR
         T5 -->|"pull_request"| T6["comment plan on PR"]
         T5 -->|"push to main"| T7["terraform apply"]
         T7 --> T8["build Mini App with<br/>VITE_API_BASE from outputs"]
-        T8 --> T9["s3 sync + CloudFront<br/>invalidate /index.html"]
+        T8 --> T9["s3 sync (assets immutable, rest no-cache)<br/>+ invalidate /index.html"]
     end
 
     build --> tf
@@ -182,6 +182,7 @@ flowchart LR
 | Plan-as-PR-comment | Infrastructure review happens on the diff of *effects*, not only the diff of HCL |
 | Mini App built **inside** the job holding the outputs | See below — this one is scar tissue |
 | CloudFront invalidation of `/index.html` only | Hashed assets are immutable and cached forever; only the entrypoint must be invalidated |
+| `index.html` uploaded as `no-cache`, `assets/` as `immutable` | The invalidation clears CloudFront, not the client. Uploaded with no `Cache-Control`, `index.html` could be reused by a Telegram webview after a deploy, pinning it to the previous bundle |
 
 **Why the Mini App is built inside the deploy job.** `VITE_API_BASE` is baked
 into the bundle at build time. A locally-built bundle once shipped with it
