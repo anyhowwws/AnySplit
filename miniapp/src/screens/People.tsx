@@ -37,6 +37,9 @@ export function People({
     <Screen
       title="Who's in?"
       subtitle={`${MIN_PEOPLE}–${MAX_PEOPLE} people. Include yourself.`}
+      // The name field is at the top, and "Assign items" is what comes after
+      // typing the last name — no reason to make them dismiss the keyboard.
+      footerWhileTyping
       footer={
         <PrimaryButton
           label="Assign items"
