@@ -8,6 +8,11 @@ a Telegram Mini App, and AnySplit returns a per-person total with service
 charge and tax folded in proportionally — either as one message per person to
 forward, or a single consolidated message to paste into a group chat.
 
+A long night can mean several receipts — dinner, drinks, supper. Up to eight
+go on one bill; each is read and grossed up by its own service charge and tax,
+then everything is split as one. When different people paid different
+receipts, everyone's balance is netted into the fewest payments.
+
 Built for Singapore, where a bill might stack 10% service charge and then 9%
 GST, or have neither. Both are read off the receipt rather than configured. A
 receipt in another currency — JPY, MYR, and a dozen others — is read the same
@@ -88,10 +93,10 @@ the two bootstrap items noted at the bottom.
 
 | Application code | Language | Role |
 |---|---|---|
-| `shared/` | TypeScript | Types, money, currency, calc, payee — imported by **both** backend and Mini App |
+| `shared/` | TypeScript | Types, money, currency, calc, receipts, settle, payee — imported by **both** backend and Mini App |
 | `backend/src/handlers/` | TypeScript | Three Lambda entrypoints: `api`, `parser`, `report` |
 | `backend/src/lib/` | TypeScript | Bot, vision, preprocessing, DB, formatting, logging, auth |
-| `miniapp/src/` | React + Vite + Tailwind | Four-screen Mini App, static build |
+| `miniapp/src/` | React + Vite + Tailwind | Mini App — four screens, plus a receipts list for a bill with several — static build |
 | `scripts/parse.ts` | TypeScript | Offline harness for measuring parse accuracy |
 
 Created out-of-band, because they cannot bootstrap themselves: the **S3 state
@@ -255,7 +260,7 @@ sequenceDiagram
     U->>TG: sends receipt photo
     TG->>API: webhook update
     API->>DB: create bill (status: parsing)
-    API->>Q: enqueue billId
+    API->>Q: enqueue billId + receiptId
     API-->>TG: "Reading your receipt…" (< 2.5s)
 
     Q->>P: deliver message
@@ -264,16 +269,24 @@ sequenceDiagram
     P->>C: vision call, forced tool use
     C-->>P: structured line items
     P->>P: validate — three independent gates
-    P->>DB: store units (status: review)
-    P->>TG: edit message → summary + "Review & split"
+    P->>DB: store the receipt (status: review)
+    P->>TG: edit message → summary + "Review & split", "➕ Add another receipt"
+
+    opt another receipt on the same bill
+        U->>TG: taps ➕, then sends the next photo
+        TG->>API: callback, then photo
+        API->>DB: add a receipt to the bill (status: parsing)
+        API->>Q: enqueue billId + receiptId
+        Note over P: parsed exactly as above
+    end
 
     U->>MA: taps button, Mini App opens
     MA->>API: GET /api/bills/:id (signed initData)
     API-->>MA: bill
-    Note over MA: Review → People → Assign → Summary
-    MA->>API: PATCH corrections
-    MA->>API: POST /finalise { people, payee, mode }
-    API->>API: computeShares (same code as preview)
+    Note over MA: (Receipts →) Review → People → Assign → Summary
+    MA->>API: PATCH corrections, one receipt at a time
+    MA->>API: POST /finalise { people, payers, paidBy, mode }
+    API->>API: computeBillShares + settle (same code as preview)
     API->>DB: save shares, refresh TTL
     API->>TG: per-person messages, or one group message
     U->>U: forwards them
@@ -349,7 +362,7 @@ messages read exactly as they did, and the client still sends a single
 | **Review** | One receipt's merchant, line items and total, all editable. The model proposes; the payer confirms |
 | **People** | Who is splitting |
 | **Assign** | Tap a person, tap their items. Multiple people on one item splits it. Grouped under each receipt's name when there are several |
-| **Summary** | Per-person totals, who is collecting, and the two send options |
+| **Summary** | Per-person totals, who paid — one payer for a single receipt, or each receipt's payer with a settle-up preview — and the two send options |
 
 ### API surface
 

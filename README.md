@@ -32,7 +32,7 @@ Terraform specifics: bootstrap, credentials, and the CI role.
 
 ```
 AnySplit/
-├── shared/          types, money, currency, calc, payee — imported by BOTH backend and miniapp
+├── shared/          types, money, currency, calc, receipts, settle, payee — imported by BOTH backend and miniapp
 ├── backend/         three Lambdas: `api` (webhook + REST), `parser` (vision), `report` (daily digest)
 ├── miniapp/         React + Vite + Tailwind, static, served from CloudFront
 ├── infra/           Terraform
