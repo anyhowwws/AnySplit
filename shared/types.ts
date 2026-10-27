@@ -39,7 +39,23 @@ export interface Share {
   unitIds: string[];
   /** Final amount owed, in cents, tax-inclusive and cent-reconciled. */
   cents: number;
+  /**
+   * `cents` broken down by receiptId; each entry reconciles with the other
+   * people's against that receipt's total. Absent on shares written before
+   * bills could hold several receipts, which only ever had one.
+   */
+  byReceipt?: Record<string, number>;
 }
+
+/**
+ * Where one receipt is in its own life, independent of the bill's.
+ *
+ * `parsing` — its photo is still being read.
+ * `review`  — read; its items are ready to check and split.
+ * `error`   — couldn't be read; `note` says why. Has no items, and blocks
+ *             sending until it's removed.
+ */
+export type ReceiptStatus = 'parsing' | 'review' | 'error';
 
 /**
  * One photographed receipt. A bill holds one or more of these, and each is
@@ -48,8 +64,14 @@ export interface Share {
  * under one `factor` would overcharge some people and undercharge others.
  */
 export interface Receipt {
-  /** Stable id, unique within the bill. e.g. "r0". Prefixes its units' ids. */
+  /**
+   * Stable id, unique within the bill and never reused — "r0" for the first,
+   * random after that, so a parse still in flight for a removed receipt can't
+   * land in a later one. Prefixes its units' ids.
+   */
   receiptId: string;
+  /** Absent on receipts written before this field existed: they were all read. */
+  status?: ReceiptStatus;
   /** Display order: the order the photos arrived in. */
   seq: number;
   merchant: string;
@@ -76,7 +98,7 @@ export interface Receipt {
   gst?: number;
   /** Discount in cents, as printed, positive. Already deducted from `total`. */
   discount?: number;
-  /** Parse warnings for this receipt, surfaced on the Review screen. */
+  /** Parse warnings, or why the parse failed, surfaced in the Mini App. */
   note?: string;
 }
 
@@ -96,7 +118,7 @@ export interface Bill {
   shares: Share[];
   /** Unix epoch SECONDS. Re-checked on read; expired items are treated absent. */
   ttl: number;
-  /** Why the parse failed, when `status` is `error`. */
+  /** Why the first receipt's parse failed, when `status` is `error`. */
   note?: string;
   /**
    * Who to pay back — name only; see StoredPayee for why no phone number.

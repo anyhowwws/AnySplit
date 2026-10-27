@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Bill, SendMode, Share, Unit } from '../../shared/types.ts';
-import { CalcError, computeBillShares, deriveFactor, subtotalOf } from '../../shared/calc.ts';
+import type { Bill, Receipt, SendMode, Share, Unit } from '../../shared/types.ts';
+import { CalcError, computeBillShares } from '../../shared/calc.ts';
 import { DEFAULT_CURRENCY } from '../../shared/currency.ts';
 import { type Payee } from '../../shared/payee.ts';
-import { onlyReceipt } from '../../shared/receipts.ts';
-import { ApiRequestError, fetchBill, finaliseBill, patchBill } from './lib/api.ts';
+import { allUnits, receiptsOf, readyReceipts, splitBlocker } from '../../shared/receipts.ts';
+import { ApiRequestError, fetchBill, finaliseBill, patchBill, removeReceipt } from './lib/api.ts';
 import {
   alertUser,
   billIdFromUrl,
   closeApp,
+  confirmUser,
   haptic,
   insideTelegram,
   onBack,
@@ -17,12 +18,15 @@ import {
 import { Banner, Centered } from './components/Chrome.tsx';
 import { Assign, type Assignment } from './screens/Assign.tsx';
 import { People } from './screens/People.tsx';
+import { Receipts } from './screens/Receipts.tsx';
 import { Review } from './screens/Review.tsx';
 import { Summary } from './screens/Summary.tsx';
 
-type Step = 'review' | 'people' | 'assign' | 'summary';
-
-const STEP_ORDER: Step[] = ['review', 'people', 'assign', 'summary'];
+/**
+ * `receipts` only appears for a bill with more than one; with one, Review is
+ * the first screen, exactly as before bills could hold several.
+ */
+type Step = 'receipts' | 'review' | 'people' | 'assign' | 'summary';
 
 export function App() {
   const billId = useMemo(billIdFromUrl, []);
@@ -34,20 +38,44 @@ export function App() {
   // Which delivery the admin chose, so the confirmation can name it.
   const [sent, setSent] = useState<SendMode | null>(null);
 
-  // Working copies. The server holds the truth; these are the admin's edits
-  // until the PATCH on leaving Review.
-  // The receipt being edited. A bill holds exactly one for now.
-  const [receiptId, setReceiptId] = useState<string | undefined>(undefined);
-  const [note, setNote] = useState<string | undefined>(undefined);
+  // Working copy of the receipt open in Review. The server holds the truth;
+  // these are the admin's edits until the PATCH on leaving Review.
+  const [editing, setEditing] = useState<Receipt | null>(null);
   const [merchant, setMerchant] = useState('');
   const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
   const [units, setUnits] = useState<Unit[]>([]);
   const [totalCents, setTotalCents] = useState(0);
+
   const [names, setNames] = useState<string[]>([]);
   const [assignment, setAssignment] = useState<Assignment>({});
   // Prefilled with the admin's own Telegram name — they paid it themselves
   // most of the time, and it is trivially editable when they didn't.
   const [payee, setPayee] = useState<Payee>(() => ({ name: ownFirstName(), phone: '' }));
+
+  const receipts = useMemo(() => (bill ? receiptsOf(bill) : []), [bill]);
+  const multi = receipts.length > 1;
+
+  function openReview(receipt: Receipt) {
+    setEditing(receipt);
+    setMerchant(receipt.merchant);
+    setCurrency(receipt.currency);
+    setUnits(receipt.units);
+    setTotalCents(receipt.total);
+    setStep('review');
+  }
+
+  /**
+   * Takes a fresh copy of the bill from the server, dropping any assignment to
+   * a unit that's no longer on it — deleted in Review, or on a receipt that
+   * was removed.
+   */
+  function adopt(updated: Bill) {
+    setBill(updated);
+    const live = new Set(allUnits(updated).map((u) => u.id));
+    setAssignment((current) =>
+      Object.fromEntries(Object.entries(current).filter(([id]) => live.has(id))),
+    );
+  }
 
   const load = useCallback(async () => {
     // No bill id at all isn't a load failure — it means the app was opened
@@ -57,14 +85,11 @@ export function App() {
     try {
       const { bill: loaded } = await fetchBill(billId);
       setBill(loaded);
-      const receipt = onlyReceipt(loaded);
-      setReceiptId(receipt.receiptId);
-      setNote(receipt.note);
-      setMerchant(receipt.merchant);
-      setCurrency(receipt.currency);
-      setUnits(receipt.units);
-      setTotalCents(receipt.total);
       setLoadError(null);
+
+      const loadedReceipts = receiptsOf(loaded);
+      if (loadedReceipts.length > 1) setStep('receipts');
+      else openReview(loadedReceipts[0]!);
 
       // Re-opening a bill that was already sent: rebuild the working state from
       // the stored shares so the admin lands on the summary with everything as
@@ -91,7 +116,12 @@ export function App() {
             personIndex: loaded.payee!.personIndex,
           }));
         }
-        setStep('summary');
+
+        // Straight to the summary — unless a receipt was added after sending,
+        // whose items nobody has been given yet. Then it's the start, so the
+        // new receipt gets looked at before anything is re-sent.
+        const everyUnitAssigned = allUnits(loaded).every((unit) => restored[unit.id]?.length);
+        if (everyUnitAssigned && !splitBlocker(loadedReceipts)) setStep('summary');
       }
     } catch (err) {
       setLoadError(err instanceof ApiRequestError ? err.message : 'Could not load this bill.');
@@ -102,58 +132,100 @@ export function App() {
     void load();
   }, [load]);
 
-  // Native back button walks the step list rather than the browser history —
+  /** The receipts list's "Check again", while a photo is still being read. */
+  async function refresh() {
+    if (!billId) return;
+    try {
+      adopt((await fetchBill(billId)).bill);
+    } catch (err) {
+      alertUser(err instanceof ApiRequestError ? err.message : 'Could not load this bill.');
+    }
+  }
+
+  // Native back button walks the steps rather than the browser history —
   // there is no history here, it's one page.
   useEffect(() => {
-    const index = STEP_ORDER.indexOf(step);
-    if (index <= 0 || sent !== null) return onBack(null);
-    return onBack(() => setStep(STEP_ORDER[index - 1]!));
-  }, [step, sent]);
+    const previous: Partial<Record<Step, Step>> = multi
+      ? { review: 'receipts', people: 'receipts', assign: 'people', summary: 'assign' }
+      : { people: 'review', assign: 'people', summary: 'assign' };
+    const back = previous[step];
+    if (!back || sent !== null) return onBack(null);
+    return onBack(() => setStep(back));
+  }, [step, sent, multi]);
 
-  const subtotal = subtotalOf(units);
-  const factor = deriveFactor(subtotal, totalCents);
+  // Only receipts that have been read carry items. splitBlocker keeps the
+  // others from reaching People at all; this keeps them out of the sums.
+  const splitting = useMemo(() => (bill ? readyReceipts(bill) : []), [bill]);
+  const splitUnits = useMemo(() => splitting.flatMap((r) => r.units), [splitting]);
 
   /** Person assignments in the shape the calc and the API both want. */
   const people = useMemo(
     () =>
       names.map((name, index) => ({
         name,
-        unitIds: units.filter((unit) => (assignment[unit.id] ?? []).includes(index)).map((u) => u.id),
+        unitIds: splitUnits
+          .filter((unit) => (assignment[unit.id] ?? []).includes(index))
+          .map((u) => u.id),
       })),
-    [names, units, assignment],
+    [names, splitUnits, assignment],
   );
 
   const preview = useMemo<{ shares: Share[] } | { error: string }>(() => {
     if (step !== 'summary') return { shares: [] };
     try {
-      return { shares: computeBillShares([{ units, factor, total: totalCents }], people) };
+      return { shares: computeBillShares(splitting, people) };
     } catch (err) {
       return { error: err instanceof CalcError ? err.message : 'Could not work out the split.' };
     }
-  }, [step, units, factor, totalCents, people]);
+  }, [step, splitting, people]);
+
+  /**
+   * An id for a unit added in Review that no unit anywhere on the bill has:
+   * the assignment and the shares know units by id alone.
+   */
+  function newUnitId(current: Unit[]): string {
+    const prefix = editing?.receiptId ?? '';
+    const taken = new Set([
+      ...current.map((u) => u.id),
+      ...(bill ? allUnits(bill).map((u) => u.id) : []),
+    ]);
+    // Counter rather than units.length, so ids stay unique after deletes.
+    let n = current.length;
+    while (taken.has(`${prefix}u${n}`)) n++;
+    return `${prefix}u${n}`;
+  }
 
   async function saveAndContinue() {
-    if (!bill) return;
+    if (!bill || !editing) return;
     setBusy(true);
     try {
       const { bill: updated } = await patchBill(bill.billId, {
-        receiptId,
+        receiptId: editing.receiptId,
         merchant,
         currency,
         total: totalCents,
         units,
       });
-      setBill(updated);
-      const saved = onlyReceipt(updated);
-      setUnits(saved.units);
-      // Any unit the admin deleted must not linger in the assignment map.
-      const live = new Set(saved.units.map((u) => u.id));
-      setAssignment((current) =>
-        Object.fromEntries(Object.entries(current).filter(([id]) => live.has(id))),
-      );
-      setStep('people');
+      adopt(updated);
+      setUnits(updated.receipts[editing.receiptId]?.units ?? units);
+      setStep(receiptsOf(updated).length > 1 ? 'receipts' : 'people');
     } catch (err) {
       alertUser(err instanceof ApiRequestError ? err.message : 'Could not save those changes.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(receipt: Receipt) {
+    if (!bill) return;
+    const label = receipt.merchant || 'this receipt';
+    if (!(await confirmUser(`Take ${label} off this bill?`))) return;
+    setBusy(true);
+    try {
+      adopt((await removeReceipt(bill.billId, receipt.receiptId)).bill);
+      haptic('success');
+    } catch (err) {
+      alertUser(err instanceof ApiRequestError ? err.message : 'Could not remove that receipt.');
     } finally {
       setBusy(false);
     }
@@ -271,6 +343,19 @@ export function App() {
   /* ------------------------------------------------------------ screens */
 
   switch (step) {
+    case 'receipts':
+      return (
+        <Receipts
+          receipts={receipts}
+          blocker={splitBlocker(receipts)}
+          onOpen={openReview}
+          onRemove={(receipt) => void remove(receipt)}
+          onRefresh={() => void refresh()}
+          onNext={() => setStep('people')}
+          busy={busy}
+        />
+      );
+
     case 'review':
       return (
         <Review
@@ -282,7 +367,9 @@ export function App() {
           setUnits={setUnits}
           totalCents={totalCents}
           setTotalCents={setTotalCents}
-          note={note}
+          note={editing?.note}
+          newUnitId={newUnitId}
+          nextLabel={multi ? 'Save this receipt' : 'Add people'}
           onNext={() => void saveAndContinue()}
           busy={busy}
         />
@@ -296,8 +383,12 @@ export function App() {
     case 'assign':
       return (
         <Assign
-          units={units}
-          currency={currency}
+          sections={splitting.map((receipt, index) => ({
+            key: receipt.receiptId,
+            title: multi ? receipt.merchant || `Receipt ${index + 1}` : undefined,
+            units: receipt.units,
+          }))}
+          currency={splitting[0]?.currency ?? DEFAULT_CURRENCY}
           names={names}
           assignment={assignment}
           setAssignment={setAssignment}
@@ -323,10 +414,7 @@ export function App() {
       return (
         <Summary
           shares={preview.shares}
-          units={units}
-          total={totalCents}
-          currency={currency}
-          factor={factor}
+          receipts={splitting}
           names={names}
           payee={payee}
           setPayee={setPayee}

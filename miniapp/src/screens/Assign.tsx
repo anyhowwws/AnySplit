@@ -8,6 +8,13 @@ import { haptic } from '../lib/telegram.ts';
 /** unitId -> indexes into `names`. Several people on one unit means a split. */
 export type Assignment = Record<string, number[]>;
 
+/** One receipt's units. `title` is omitted when the bill has only one. */
+export interface AssignSection {
+  key: string;
+  title?: string;
+  units: Unit[];
+}
+
 /**
  * Screen 3 — tap items onto people.
  *
@@ -16,14 +23,14 @@ export type Assignment = Record<string, number[]>;
  * is two taps, with no fraction UI anywhere.
  */
 export function Assign({
-  units,
+  sections,
   currency,
   names,
   assignment,
   setAssignment,
   onNext,
 }: {
-  units: Unit[];
+  sections: AssignSection[];
   currency: string;
   names: string[];
   assignment: Assignment;
@@ -31,7 +38,9 @@ export function Assign({
   onNext: () => void;
 }) {
   const taxLabel = currencyInfo(currency).taxLabel;
-  const labels = disambiguate(units);
+  const units = sections.flatMap((section) => section.units);
+  // Per receipt: "Beer (1 of 2)" counts the beers on the paper in your hand.
+  const labels = new Map(sections.flatMap((section) => [...disambiguate(section.units)]));
   const outstanding = unassignedCents(
     units,
     names.map((name, index) => ({
@@ -106,75 +115,84 @@ export function Assign({
         </button>
       ) : null}
 
-      <div className="space-y-2">
-        {units.map((unit) => {
-          const selected = assignment[unit.id] ?? [];
-          const everyone = selected.length === names.length && names.length > 0;
-          const perHead = selected.length > 0 ? unit.cents / selected.length : 0;
+      {sections.map((section) => (
+        <section key={section.key} className={section.title ? 'mb-4' : undefined}>
+          {section.title ? (
+            <h2 className="mb-1.5 text-xs font-medium tracking-wide text-tg-hint uppercase">
+              {section.title}
+            </h2>
+          ) : null}
+          <div className="space-y-2">
+            {section.units.map((unit) => {
+              const selected = assignment[unit.id] ?? [];
+              const everyone = selected.length === names.length && names.length > 0;
+              const perHead = selected.length > 0 ? unit.cents / selected.length : 0;
 
-          return (
-            <div key={unit.id} className="rounded-xl bg-tg-secondary px-3 py-2.5">
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="min-w-0 truncate text-base">
-                  {labels.get(unit.id)}
-                  {unit.shared ? <span className="ml-1 text-xs text-tg-hint">shared?</span> : null}
-                </span>
-                <span className="shrink-0 text-base tabular-nums">{formatMoney(unit.cents, currency)}</span>
-              </div>
+              return (
+                <div key={unit.id} className="rounded-xl bg-tg-secondary px-3 py-2.5">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="min-w-0 truncate text-base">
+                      {labels.get(unit.id)}
+                      {unit.shared ? <span className="ml-1 text-xs text-tg-hint">shared?</span> : null}
+                    </span>
+                    <span className="shrink-0 text-base tabular-nums">{formatMoney(unit.cents, currency)}</span>
+                  </div>
 
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {names.map((name, index) => {
-                  const on = selected.includes(index);
-                  return (
-                    <button
-                      key={index}
-                      type="button"
-                      onClick={() => toggle(unit.id, index)}
-                      aria-pressed={on}
-                      className="flex items-center gap-1.5 rounded-full py-1 pr-2.5 pl-1 text-sm font-medium transition-opacity active:opacity-70"
-                      style={
-                        on
-                          ? { backgroundColor: personColour(index), color: '#fff' }
-                          : { backgroundColor: 'var(--color-tg-bg)', color: 'var(--color-tg-hint)' }
-                      }
-                    >
-                      <span
-                        className="grid size-5 place-items-center rounded-full text-[10px] font-semibold text-white"
-                        style={{ backgroundColor: on ? 'rgba(0,0,0,0.2)' : personColour(index) }}
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {names.map((name, index) => {
+                      const on = selected.includes(index);
+                      return (
+                        <button
+                          key={index}
+                          type="button"
+                          onClick={() => toggle(unit.id, index)}
+                          aria-pressed={on}
+                          className="flex items-center gap-1.5 rounded-full py-1 pr-2.5 pl-1 text-sm font-medium transition-opacity active:opacity-70"
+                          style={
+                            on
+                              ? { backgroundColor: personColour(index), color: '#fff' }
+                              : { backgroundColor: 'var(--color-tg-bg)', color: 'var(--color-tg-hint)' }
+                          }
+                        >
+                          <span
+                            className="grid size-5 place-items-center rounded-full text-[10px] font-semibold text-white"
+                            style={{ backgroundColor: on ? 'rgba(0,0,0,0.2)' : personColour(index) }}
+                          >
+                            {initials(name)}
+                          </span>
+                          {name}
+                        </button>
+                      );
+                    })}
+
+                    {names.length > 1 ? (
+                      <button
+                        type="button"
+                        onClick={() => toggleEveryone(unit.id)}
+                        aria-pressed={everyone}
+                        className="rounded-full px-2.5 py-1 text-sm font-medium active:opacity-70"
+                        style={
+                          everyone
+                            ? { backgroundColor: 'var(--color-tg-button)', color: 'var(--color-tg-button-text)' }
+                            : { backgroundColor: 'var(--color-tg-bg)', color: 'var(--color-tg-link)' }
+                        }
                       >
-                        {initials(name)}
-                      </span>
-                      {name}
-                    </button>
-                  );
-                })}
+                        Everyone
+                      </button>
+                    ) : null}
+                  </div>
 
-                {names.length > 1 ? (
-                  <button
-                    type="button"
-                    onClick={() => toggleEveryone(unit.id)}
-                    aria-pressed={everyone}
-                    className="rounded-full px-2.5 py-1 text-sm font-medium active:opacity-70"
-                    style={
-                      everyone
-                        ? { backgroundColor: 'var(--color-tg-button)', color: 'var(--color-tg-button-text)' }
-                        : { backgroundColor: 'var(--color-tg-bg)', color: 'var(--color-tg-link)' }
-                    }
-                  >
-                    Everyone
-                  </button>
-                ) : null}
-              </div>
-
-              {selected.length > 1 ? (
-                <p className="mt-1.5 text-xs text-tg-hint">
-                  {formatMoney(Math.round(perHead), currency)} each, before service and {taxLabel}
-                </p>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
+                  {selected.length > 1 ? (
+                    <p className="mt-1.5 text-xs text-tg-hint">
+                      {formatMoney(Math.round(perHead), currency)} each, before service and {taxLabel}
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ))}
     </Screen>
   );
 }

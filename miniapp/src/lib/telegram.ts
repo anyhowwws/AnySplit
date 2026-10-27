@@ -99,3 +99,9 @@ export function billIdFromUrl(): string | null {
   const hash = window.location.hash.replace(/^#/, '');
   return new URLSearchParams(hash).get('bill');
 }
+
+/** A yes/no question, Telegram's native dialog where there is one. */
+export function confirmUser(message: string): Promise<boolean> {
+  if (webApp) return new Promise((resolve) => webApp.showConfirm(message, resolve));
+  return Promise.resolve(window.confirm(message));
+}

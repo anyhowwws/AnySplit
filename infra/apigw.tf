@@ -3,10 +3,10 @@ resource "aws_apigatewayv2_api" "http" {
   protocol_type = "HTTP"
 
   # The Mini App is served from CloudFront, a different origin from the API, so
-  # browser preflight applies to the PATCH and POST calls.
+  # browser preflight applies to the PATCH, POST and DELETE calls.
   cors_configuration {
     allow_origins = ["https://${aws_cloudfront_distribution.miniapp.domain_name}"]
-    allow_methods = ["GET", "POST", "PATCH", "OPTIONS"]
+    allow_methods = ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
     allow_headers = ["authorization", "content-type"]
     max_age       = 3600
   }

@@ -1,5 +1,5 @@
 import type { Bill, Receipt, Share, Unit } from '../../../shared/types.ts';
-import { allUnits, onlyReceipt, receiptsOf } from '../../../shared/receipts.ts';
+import { MAX_RECEIPTS, allUnits, receiptsOf } from '../../../shared/receipts.ts';
 import { moneyFormatter } from './money.ts';
 import { currencyInfo } from '../../../shared/currency.ts';
 // Type-only: this module stays pure presentation, with no path from here to
@@ -36,12 +36,17 @@ export function groupUnits(units: Unit[]): { label: string; qty: number; cents: 
  */
 const MERCHANT_FALLBACK = 'Dining expenses';
 
-/** The message that replaces "Reading receipt…" once the parse lands. */
-export function parsedSummary(receipt: Receipt): string {
+/**
+ * The message that replaces "Reading receipt…" once the parse lands.
+ * `position` is where the receipt sits on its bill; from the second on, the
+ * message says so, since it looks just like a new bill's otherwise.
+ */
+export function parsedSummary(receipt: Receipt, position = 1): string {
   const money = moneyFormatter(receipt.currency);
   const taxLabel = currencyInfo(receipt.currency).taxLabel;
 
   const lines: string[] = [];
+  if (position > 1) lines.push(`<i>Receipt ${position} on this bill</i>`);
   lines.push(`<b>${esc(receipt.merchant || MERCHANT_FALLBACK)}</b>`);
   lines.push('');
 
@@ -139,13 +144,18 @@ export function consolidatedMessage(
   botUsername: string,
   payee?: PayeeLike,
 ): string {
-  const receipt = onlyReceipt(bill);
-  const money = moneyFormatter(receipt.currency);
+  const receipts = receiptsOf(bill);
+  const multi = receipts.length > 1;
+  // Finalise refuses a bill whose receipts disagree on currency.
+  const money = moneyFormatter(receipts[0]!.currency);
 
   /** `maxItems: Infinity` lists everything; a number truncates with "+N more". */
   const build = (maxItems: number): string => {
     const lines: string[] = [];
-    lines.push(`🧾 <b>${esc(receipt.merchant || MERCHANT_FALLBACK)}</b> — ${money(receipt.total)}`);
+    for (const receipt of receipts) {
+      lines.push(`🧾 <b>${esc(receipt.merchant || MERCHANT_FALLBACK)}</b> — ${money(receipt.total)}`);
+    }
+    if (multi) lines.push(`<b>Total: ${money(billTotal(bill))}</b>`);
     lines.push('');
 
     shares.forEach((share, index) => {
@@ -159,16 +169,17 @@ export function consolidatedMessage(
       }
     });
 
-    const breakdown = chargeBreakdown(receipt);
-    const uplift = Math.round((receipt.factor - 1) * 1000) / 10;
-    const explanation = breakdown
-      ? `Includes ${breakdown}.`
-      : uplift < -0.05
-        ? `Includes a ${Math.abs(uplift)}% discount applied to the whole bill.`
-        : null;
-    if (explanation) {
+    const explanations = multi
+      ? receipts.flatMap((receipt) => {
+          const phrase = chargePhrase(receipt, 'receipt');
+          return phrase ? [`${esc(receipt.merchant || MERCHANT_FALLBACK)} includes ${phrase}.`] : [];
+        })
+      : [chargePhrase(receipts[0]!, 'bill')].flatMap((phrase) =>
+          phrase ? [`Includes ${phrase}.`] : [],
+        );
+    if (explanations.length > 0) {
       lines.push('');
-      lines.push(explanation);
+      lines.push(...explanations);
     }
 
     if (payee?.name) {
@@ -225,8 +236,10 @@ export function recipientBreakdown(bill: Bill, share: Share, payee?: PayeeLike):
   // they have already paid, and what they actually want to know is what the meal
   // cost them and how much is coming back.
   const isPayer = payee?.personIndex !== undefined && payee.personIndex === share.idx;
-  const receipt = onlyReceipt(bill);
-  const money = moneyFormatter(receipt.currency);
+  const receipts = receiptsOf(bill);
+  const money = moneyFormatter(receipts[0]!.currency);
+  const claimCount = countClaims(bill);
+  const mine = new Set(share.unitIds);
 
   const lines: string[] = [];
   lines.push(
@@ -234,36 +247,43 @@ export function recipientBreakdown(bill: Bill, share: Share, payee?: PayeeLike):
       ? `<b>${esc(share.name)}, you spent ${money(share.cents)}</b>`
       : `<b>${esc(share.name)}, you owe ${money(share.cents)}</b>`,
   );
-  lines.push(`at ${esc(receipt.merchant || 'this meal')}`);
-  lines.push('');
 
-  const claimCount = countClaims(bill);
-  const units = share.unitIds
-    .map((id) => receipt.units.find((u) => u.id === id))
-    .filter((u): u is Unit => u !== undefined);
-
-  for (const group of groupUnitsWithSharing(units, claimCount, money)) {
-    lines.push(group);
-  }
-
-  // Explain the gross-up rather than presenting an unexplained bigger number —
-  // but only when the receipt actually itemised the charges. If it didn't, we
-  // could still derive the percentage from the total, and that number would be
-  // arithmetically right while attributing it to "taxes and charges" we have no
-  // evidence for. Saying nothing beats naming a charge that may not exist.
-  const breakdown = chargeBreakdown(receipt);
-  const uplift = Math.round((receipt.factor - 1) * 1000) / 10;
-
-  const explanation = breakdown
-    ? `Includes ${breakdown}.`
-    : uplift < -0.05
-      ? `Includes a ${Math.abs(uplift)}% discount applied to the whole bill.`
-      : null;
-
-  // Pushed together so an omitted explanation doesn't leave a dangling blank.
-  if (explanation) {
+  if (receipts.length === 1) {
+    const receipt = receipts[0]!;
+    lines.push(`at ${esc(receipt.merchant || 'this meal')}`);
     lines.push('');
-    lines.push(explanation);
+    const units = receipt.units.filter((u) => mine.has(u.id));
+    lines.push(...groupUnitsWithSharing(orderedAs(units, share.unitIds), claimCount, money));
+
+    // Pushed together so an omitted explanation doesn't leave a dangling blank.
+    const phrase = chargePhrase(receipt, 'bill');
+    if (phrase) {
+      lines.push('');
+      lines.push(`Includes ${phrase}.`);
+    }
+  } else {
+    const had = receipts.filter((r) => r.units.some((u) => mine.has(u.id))).length;
+    lines.push(
+      had === 0 || had === receipts.length
+        ? `across ${receipts.length} receipts`
+        : `on ${had} of ${receipts.length} receipts`,
+    );
+    // One section per receipt they had something on: where, what it came to,
+    // what they had, and that receipt's own charges — which is the reason the
+    // receipts are split separately at all.
+    for (const receipt of receipts) {
+      const units = receipt.units.filter((u) => mine.has(u.id));
+      if (units.length === 0) continue;
+      const subtotal = share.byReceipt?.[receipt.receiptId];
+      lines.push('');
+      lines.push(
+        `<b>${esc(receipt.merchant || MERCHANT_FALLBACK)}</b>` +
+          (subtotal === undefined ? '' : ` — ${money(subtotal)}`),
+      );
+      lines.push(...groupUnitsWithSharing(orderedAs(units, share.unitIds), claimCount, money));
+      const phrase = chargePhrase(receipt, 'receipt');
+      if (phrase) lines.push(`Includes ${phrase}.`);
+    }
   }
 
   // The actionable part, so it goes last where the eye lands. The phone only
@@ -271,12 +291,13 @@ export function recipientBreakdown(bill: Bill, share: Share, payee?: PayeeLike):
   // ever appears, which is exactly why it needn't be stored.
   if (isPayer) {
     // Their own copy: what they put in, and what should come back.
-    const owedBack = receipt.total - share.cents;
+    const paid = billTotal(bill);
+    const owedBack = paid - share.cents;
     lines.push('');
     lines.push(
       owedBack > 0
-        ? `You paid ${money(receipt.total)}, so you're owed ${money(owedBack)} back.`
-        : `You paid ${money(receipt.total)}.`,
+        ? `You paid ${money(paid)}, so you're owed ${money(owedBack)} back.`
+        : `You paid ${money(paid)}.`,
     );
   } else if (payee?.name) {
     lines.push('');
@@ -317,6 +338,34 @@ function groupUnitsWithSharing(
     const split = group.sharedBy > 1 ? ` (split ${group.sharedBy} ways)` : '';
     return `${qty}${esc(group.label)}${split} — ${money(Math.round(group.cents))}`;
   });
+}
+
+/** What was paid across every receipt on the bill. */
+function billTotal(bill: Bill): number {
+  return receiptsOf(bill).reduce((sum, receipt) => sum + receipt.total, 0);
+}
+
+/** `units` in the order the person's own unitIds list them, as before. */
+function orderedAs(units: Unit[], unitIds: string[]): Unit[] {
+  const byId = new Map(units.map((u) => [u.id, u]));
+  return unitIds.map((id) => byId.get(id)).filter((u): u is Unit => u !== undefined);
+}
+
+/**
+ * The gross-up explained, as a phrase to follow "includes": "10% service
+ * charge and 9% GST", or a discount. Null when there's nothing to say.
+ *
+ * Explains rather than presenting an unexplained bigger number — but only
+ * when the receipt actually itemised the charges. If it didn't, we could
+ * still derive the percentage from the total, and that number would be
+ * arithmetically right while attributing it to "taxes and charges" we have no
+ * evidence for. Saying nothing beats naming a charge that may not exist.
+ */
+function chargePhrase(receipt: Receipt, scope: 'bill' | 'receipt'): string | null {
+  const breakdown = chargeBreakdown(receipt);
+  if (breakdown) return breakdown;
+  const uplift = Math.round((receipt.factor - 1) * 1000) / 10;
+  return uplift < -0.05 ? `a ${Math.abs(uplift)}% discount applied to the whole ${scope}` : null;
 }
 
 /**
@@ -479,6 +528,10 @@ export const HELP_TEXT = [
   '',
   'Two or more people can share a single item — tap both names on it and the cost ' +
     'is divided between them.',
+  '',
+  'A night with several bills? Tap <b>➕ Add another receipt</b> under the first one and ' +
+    `send the next photo — up to ${MAX_RECEIPTS} receipts become one split, each with its own ` +
+    'service charge and GST.',
   '',
   'Tax and service charge are taken from the receipt itself, so hawker stalls, ' +
     'GST-only venues, and full-service restaurants all work without settings.',

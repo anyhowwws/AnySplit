@@ -17,14 +17,14 @@ import { registerHandlers } from '../lib/bot.ts';
 import { CalcError, computeBillShares, deriveFactor, subtotalOf, unassignedCents } from '../lib/calc.ts';
 import { MAX_PEOPLE, MIN_PEOPLE } from '../lib/config.ts';
 import { botToken, webhookSecret } from '../lib/secrets.ts';
-import { claimUpdate, getBill, saveReceipts, saveShares } from '../lib/db.ts';
+import { claimUpdate, getBill, removeReceipt, saveReceipt, saveShares } from '../lib/db.ts';
 import { consolidatedMessage, shareMessage } from '../lib/format.ts';
 import { isBillId } from '../lib/ids.ts';
 import { addLogContext, consumeColdStart, errorFields, log, withLogContext } from '../lib/log.ts';
 import { formatMoney, isCents } from '../lib/money.ts';
 import { isSupportedCurrency } from '../../../shared/currency.ts';
 import { cleanPayee, toStoredPayee } from '../../../shared/payee.ts';
-import { allUnits, receiptsOf } from '../../../shared/receipts.ts';
+import { allUnits, receiptsOf, splitBlocker, statusOf } from '../../../shared/receipts.ts';
 import { initDataFromAuthHeader, verifyInitData } from '../lib/initdata.ts';
 import { getBot } from '../lib/telegram.ts';
 import { userRef } from '../lib/userref.ts';
@@ -205,6 +205,9 @@ app.patch('/api/bills/:id', async (c) => {
         : undefined
       : bill.receipts[body.receiptId];
   if (!receipt) return c.json({ error: 'unknown receipt' }, 400);
+  if (statusOf(receipt) !== 'review') {
+    return c.json({ error: "That receipt hasn't been read yet." }, 409);
+  }
 
   const units = body.units === undefined ? receipt.units : validateUnits(body.units);
   if (units === null) return c.json({ error: 'invalid units' }, 400);
@@ -229,8 +232,10 @@ app.patch('/api/bills/:id', async (c) => {
   const factor = deriveFactor(subtotal, total);
 
   const edited: Receipt = { ...receipt, merchant, currency, subtotal, total, factor, units };
+  if (!(await saveReceipt(bill, edited))) {
+    return c.json({ error: 'That receipt has been removed from the bill.' }, 409);
+  }
   const updatedReceipts = { ...bill.receipts, [receipt.receiptId]: edited };
-  await saveReceipts(bill.billId, updatedReceipts);
   log.info('bill edited', {
     billId: bill.billId,
     receiptId: receipt.receiptId,
@@ -242,6 +247,27 @@ app.patch('/api/bills/:id', async (c) => {
 
   const updated: Bill = { ...bill, receipts: updatedReceipts };
   return c.json({ bill: updated } satisfies { bill: Bill });
+});
+
+/**
+ * Takes one receipt off the bill. The last one can't go — a bill with no
+ * receipts has nothing to split; the admin just leaves it to expire.
+ */
+app.delete('/api/bills/:id/receipts/:receiptId', async (c) => {
+  const authed = await authorise(c);
+  if (authed instanceof Response) return authed;
+  const { bill } = authed;
+
+  const receiptId = c.req.param('receiptId');
+  if (!bill.receipts[receiptId]) return c.json({ error: 'unknown receipt' }, 400);
+
+  if (!(await removeReceipt(bill.billId, receiptId))) {
+    return c.json({ error: "A bill needs at least one receipt." }, 409);
+  }
+  log.info('receipt removed', { receiptId, remaining: receiptsOf(bill).length - 1 });
+
+  const { [receiptId]: _removed, ...receipts } = bill.receipts;
+  return c.json({ bill: { ...bill, receipts } } satisfies { bill: Bill });
 });
 
 app.post('/api/bills/:id/finalise', async (c) => {
@@ -261,6 +287,9 @@ app.post('/api/bills/:id/finalise', async (c) => {
   }
 
   const receipts = receiptsOf(bill);
+  const blocker = splitBlocker(receipts);
+  if (blocker) return c.json({ error: blocker }, 400);
+
   const units = allUnits(bill);
   const people = validatePeople(body.people, units);
   if (typeof people === 'string') return c.json({ error: people }, 400);
@@ -270,8 +299,7 @@ app.post('/api/bills/:id/finalise', async (c) => {
   const claimed = new Set(people.flatMap((person) => person.unitIds));
   const unclaimed = units.filter((unit) => !claimed.has(unit.id));
   if (unclaimed.length > 0) {
-    // Summing cents across receipts is only meaningful in one currency, so a
-    // bill's receipts must all share one — the first receipt's speaks for all.
+    // splitBlocker has already made sure every receipt shares one currency.
     const outstanding = unassignedCents(units, people);
     return c.json(
       {

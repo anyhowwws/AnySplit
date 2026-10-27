@@ -20,6 +20,8 @@ export function Review({
   totalCents,
   setTotalCents,
   note,
+  newUnitId,
+  nextLabel,
   onNext,
   busy,
 }: {
@@ -32,6 +34,9 @@ export function Review({
   totalCents: number;
   setTotalCents: (cents: number) => void;
   note?: string;
+  /** An id no unit anywhere on the bill has — they're unique bill-wide. */
+  newUnitId: (units: Unit[]) => string;
+  nextLabel: string;
   onNext: () => void;
   busy: boolean;
 }) {
@@ -49,11 +54,7 @@ export function Review({
   }
 
   function addUnit() {
-    // Suffix from a counter, not units.length, so ids stay unique after deletes.
-    const taken = new Set(units.map((u) => u.id));
-    let n = units.length;
-    while (taken.has(`u${n}`)) n++;
-    setUnits([...units, { id: `u${n}`, name: '', displayName: '', cents: 0, shared: false }]);
+    setUnits([...units, { id: newUnitId(units), name: '', displayName: '', cents: 0, shared: false }]);
   }
 
   const canContinue = units.length > 0 && totalCents > 0 && subtotal > 0;
@@ -64,7 +65,7 @@ export function Review({
       subtitle="Fix anything I misread. Tap a price to edit it."
       footer={
         <PrimaryButton
-          label="Add people"
+          label={nextLabel}
           onClick={onNext}
           disabled={!canContinue}
           busy={busy}
