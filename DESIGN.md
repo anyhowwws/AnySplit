@@ -292,13 +292,40 @@ stateDiagram-v2
     review --> [*]: TTL (abandoned)
 ```
 
-### The four screens
+The bill's status follows its **first** receipt. Later receipts have a status
+of their own (`parsing` → `review`) and never move the bill's: one still being
+read just holds up sending, and one that can't be read is taken off the bill
+again, with a reply offering the button to try another photo.
+
+### Several receipts on one bill
+
+A long night can mean several bills — dinner, then drinks, then supper. Under
+every parsed receipt sits **➕ Add another receipt**. Tapping it writes a
+short-lived marker, `att#<telegram id>` → bill, with a 15-minute `ttl`; the
+admin's next photo consumes it with a delete that returns what it deleted (so
+two photos sent together can't both claim it) and joins that bill instead of
+starting one. The photo still arrives as an ordinary message: the Mini App
+never handles an image, so nothing about how photos are kept changes.
+
+| Rule | Why |
+|---|---|
+| At most 8 receipts | Each is a vision call, and the bill must stay well inside a 400KB item. Enforced in the same conditional write that adds one |
+| One currency per bill | Amounts in two currencies can't be summed, and converting needs the rate the payer's card actually used. Sending is refused until a misread currency is fixed or the receipt removed |
+| One payer for the whole bill | "Who's collecting" covers every receipt. Different people paying different receipts is a later step |
+| Receipt ids are random after `r0` | So a parse still queued for a removed receipt can never land in a new one |
+| The last receipt can't be removed | A bill with nothing on it has nothing to split; it just expires |
+
+`/test` honours the marker too, so a multi-receipt bill can be put together
+from fixtures without a single vision call.
+
+### The screens
 
 | Screen | Purpose |
 |---|---|
-| **Review** | Merchant, line items and total, all editable. The model proposes; the payer confirms |
+| **Receipts** | Only when the bill has more than one: every receipt, tap to review, × to remove. With one, the app opens on Review exactly as it always did |
+| **Review** | One receipt's merchant, line items and total, all editable. The model proposes; the payer confirms |
 | **People** | Who is splitting |
-| **Assign** | Tap a person, tap their items. Multiple people on one item splits it |
+| **Assign** | Tap a person, tap their items. Multiple people on one item splits it. Grouped under each receipt's name when there are several |
 | **Summary** | Per-person totals, who is collecting, and the two send options |
 
 ### API surface
@@ -307,7 +334,8 @@ stateDiagram-v2
 |---|---|
 | `POST /webhook` | Telegram updates. Requires the secret-token header |
 | `GET /api/bills/:id` | Load a bill. Admin only |
-| `PATCH /api/bills/:id` | Corrections from the Review screen |
+| `PATCH /api/bills/:id` | Corrections from the Review screen, to one receipt (`receiptId`) |
+| `DELETE /api/bills/:id/receipts/:receiptId` | Take a receipt off the bill. Never the last one |
 | `POST /api/bills/:id/finalise` | Compute shares and send. Repeatable |
 | `OPTIONS /*` | CORS preflight |
 | `GET /health` | Liveness |
@@ -326,16 +354,17 @@ architecturally is which fields are derived and which are decoration.
 |---|---|
 | `billId` | Partition key. 12-char base64url |
 | `adminId` | Telegram id of the payer. The only user allowed to read or mutate the bill |
-| `receipts` | Map of `receiptId` → receipt; fields below. One entry today |
-| `shares` | Populated on finalise, and rewritten on every re-finalise. Each is a person's sum across every receipt |
+| `receipts` | Map of `receiptId` → receipt; fields below |
+| `shares` | Populated on finalise, and rewritten on every re-finalise. Each is a person's sum across every receipt, with `byReceipt` holding what it's made of |
 | `ttl` | Epoch seconds. Re-checked on read |
-| `note` | Why the parse failed, when `status` is `error` |
+| `note` | Why the first receipt's parse failed, when `status` is `error` |
 
 Each receipt:
 
 | Field | Note |
 |---|---|
-| `receiptId`, `seq` | `r0`, `r1`, … and the order the photos arrived in. The id prefixes its units' ids, so unit ids are unique across the bill |
+| `receiptId`, `seq` | `r0` for the first, random after that, and the order the photos arrived in. The id prefixes its units' ids, so unit ids are unique across the bill |
+| `status` | `parsing`, `review` or `error`. Absent on receipts written before it existed, which were all read |
 | `currency` | ISO 4217 code read off the receipt. Defaults to `SGD` — for the placeholder written before the vision call returns, and for bills written before multi-currency support existed at all |
 | `subtotal` | The sum of `units` — **not** the receipt's printed subtotal |
 | `total` | What was actually paid, in cents |
@@ -357,18 +386,19 @@ its own with `computeShares` (its own factor, its own cent reconciliation) and
 only then sums per person, so each receipt's shares still add to exactly what
 was paid on it. With one receipt it *is* `computeShares`.
 
-`receipts` is a map rather than a list so that, once several receipts can be
-parsed at once, each parse can write its own entry. For now writes replace the
-whole map: a nested path can't be set on a row written before `receipts`
-existed, which `getBill` reads as a one-receipt bill and the first save tidies
-up. Those rows are gone within the 24-hour TTL, after which the per-receipt
-write is safe.
+`receipts` is a map rather than a list so that each parse and each edit can
+write its own entry, `receipts.<id>`, conditioned on that receipt still being
+there: two receipts landing at once can't overwrite each other, and a parse for
+a receipt removed in the meantime can't bring it back. A row written before
+`receipts` existed has no map to write into; `getBill` reads it as a
+one-receipt bill and its first save writes the whole map instead. Those rows
+are gone within the 24-hour TTL, after which that fallback can be deleted.
 
-Two other item shapes share the table rather than earning tables of their own:
+Three other item shapes share the table rather than earning tables of their own:
 `upd#<update_id>`, written conditionally with a one-hour `ttl` to dedupe
-Telegram's webhook retries, and the rate-limit counters described below, keyed
-by window start so they expire themselves. A second table for either would be
-pure ceremony.
+Telegram's webhook retries; the rate-limit counters described below, keyed
+by window start so they expire themselves; and the `att#` add-receipt markers
+above. A second table for any of them would be pure ceremony.
 
 ---
 
@@ -719,7 +749,8 @@ specifically so they cannot drift from it.
 | Voice assignment | "Marcus had the ribeye and two beers" is the best version of this product. It needs the rest of it to work first |
 | PayNow QR | High value, and the point at which a bill splitter starts to look like it moves money. Deliberately deferred rather than dismissed |
 | Settling a foreign bill back in SGD | Needs the payer's actual card-charged SGD amount, which only they have — not a fetched FX rate, which would disagree with their card statement by construction. Deferred rather than built wrong |
-| Multiple receipts consolidated into one split | One receipt covers the common case. Several needs a per-receipt `factor` (service charge and tax don't necessarily stack the same way twice) and a new story for how photos attach to a bill — deferred, not forgotten |
+| A different payer for each receipt | Several receipts now make one split, but one person collects for all of them. Per-receipt payers need a who-owes-whom settlement on top — the next step, not forgotten |
+| Receipts in several currencies on one bill | Summing them needs the payer's actual card rate (see above). Refused rather than converted wrong |
 
 ### Rate limiting
 

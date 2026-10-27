@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { SendMode, Share, Unit } from '../../../shared/types.ts';
+import type { Receipt, SendMode, Share } from '../../../shared/types.ts';
 import { type Payee, normalisePhone } from '../../../shared/payee.ts';
 import { formatMoney } from '../../../shared/money.ts';
 import { currencyInfo } from '../../../shared/currency.ts';
@@ -15,15 +15,12 @@ import {
 /**
  * Screen 4 — the numbers, then send.
  *
- * These shares are computed locally with the same `computeShares` the backend
+ * These shares are computed locally with the same `computeBillShares` the backend
  * runs on finalise, so what the admin approves here is exactly what gets sent.
  */
 export function Summary({
   shares,
-  units,
-  total,
-  currency,
-  factor,
+  receipts,
   names,
   payee,
   setPayee,
@@ -32,10 +29,8 @@ export function Summary({
   busy,
 }: {
   shares: Share[];
-  units: Unit[];
-  total: number;
-  currency: string;
-  factor: number;
+  /** Every receipt being split. All in one currency — the split refuses otherwise. */
+  receipts: Receipt[];
   /** The people splitting, so the payer can be picked rather than retyped. */
   names: string[];
   payee: Payee;
@@ -59,9 +54,14 @@ export function Summary({
     names.findIndex((n) => n.trim().toLowerCase() === payee.name.trim().toLowerCase());
   const someoneElse = matchedIndex < 0;
 
+  const currency = receipts[0]!.currency;
+  const total = receipts.reduce((acc, receipt) => acc + receipt.total, 0);
   const sum = shares.reduce((acc, share) => acc + share.cents, 0);
-  const unitById = new Map(units.map((unit) => [unit.id, unit]));
-  const upliftPct = (factor - 1) * 100;
+  const unitById = new Map(receipts.flatMap((r) => r.units).map((unit) => [unit.id, unit]));
+  const multi = receipts.length > 1;
+  // One receipt: its gross-up as a single figure. Several: each has its own,
+  // so there's no one percentage that would be true.
+  const upliftPct = multi ? 0 : (receipts[0]!.factor - 1) * 100;
   const taxLabel = currencyInfo(currency).taxLabel;
   // PayNow is Singapore-specific — naming it on a foreign-currency bill would
   // claim a payment rail that has nothing to do with what was actually paid.
@@ -235,11 +235,16 @@ export function Summary({
       </div>
 
       <p className="mt-3 text-xs text-tg-hint">
+        {multi
+          ? `Each receipt's service charge and ${taxLabel} go on the items from that receipt only. `
+          : ''}
         {Math.abs(upliftPct) >= 0.05
           ? `Each share includes its own portion of the ${upliftPct > 0 ? `${upliftPct.toFixed(1)}% service charge and ${taxLabel}` : `${Math.abs(upliftPct).toFixed(1)}% discount`}. `
           : ''}
-        Rounding leaves a little over; it goes to the largest share so the shares
-        add up to exactly {formatMoney(total, currency)}.
+        {multi
+          ? 'Rounding leaves a little over on each receipt; it goes to the largest share there, so the shares add up to exactly '
+          : 'Rounding leaves a little over; it goes to the largest share so the shares add up to exactly '}
+        {formatMoney(total, currency)}.
       </p>
     </Screen>
   );

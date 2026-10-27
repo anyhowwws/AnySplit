@@ -79,3 +79,10 @@ export function finaliseBill(billId: string, body: FinaliseRequest): Promise<Fin
     body: JSON.stringify(body),
   });
 }
+
+export function removeReceipt(billId: string, receiptId: string): Promise<{ bill: Bill }> {
+  return request<{ bill: Bill }>(
+    `/api/bills/${encodeURIComponent(billId)}/receipts/${encodeURIComponent(receiptId)}`,
+    { method: 'DELETE' },
+  );
+}

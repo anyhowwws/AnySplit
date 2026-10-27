@@ -9,6 +9,10 @@ as one forwardable message per person or as a single consolidated message to
 paste into a group chat. Each message carries the full breakdown inline — no
 links to follow.
 
+A night with several bills becomes one split: **➕ Add another receipt** under
+a parsed receipt attaches the next photo to the same bill, up to eight, each
+grossed up by its own service charge and tax.
+
 Built for Singapore, where a receipt might stack 10% service charge and then 9%
 GST, or have neither — so both are read off the receipt rather than configured.
 Receipts in other currencies are read too — JPY, MYR, USD, and a dozen others —

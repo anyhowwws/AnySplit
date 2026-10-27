@@ -1,5 +1,6 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import {
+  DeleteCommand,
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
@@ -80,9 +81,8 @@ interface LegacyBillBody {
  * Reads a bill written before receipts existed as a bill with one receipt.
  *
  * No migration: bills live 24 hours, so every such row is gone a day after
- * this ships, and this — with the `job.receiptId` fallback in the parser — can
- * go with them. Unit ids are kept as they were, because a final bill's shares
- * refer to them.
+ * this ships, and this — with saveReceipt's fallback — can go with them. Unit
+ * ids are kept as they were, because a final bill's shares refer to them.
  *
  * `note` meant both things on a legacy bill: why the parse failed, or what to
  * check in a parse that landed. The first stays on the bill, the second
@@ -116,37 +116,204 @@ function fromLegacy(item: Bill & Partial<LegacyBillBody>): Bill {
   };
 }
 
+/** True for DynamoDB's "the condition didn't hold" — the expected refusal. */
+function conditionFailed(err: unknown): boolean {
+  return err instanceof Error && err.name === 'ConditionalCheckFailedException';
+}
+
 /**
- * Writes a bill's receipts, and optionally its status, in one update.
+ * Writes one receipt, and optionally the bill's status, in one update.
+ * Returns false when the receipt is no longer on the bill — removed while its
+ * photo was being read, or while the admin was editing it.
  *
- * The whole map, not `receipts.<id>`: a nested path can't be set on a legacy
- * row that has no `receipts` attribute yet, and while a bill holds one receipt
- * there is no sibling to overwrite. Once a bill can take several receipts in
- * parallel this has to become a per-receipt write — safe by then, since the
- * last legacy row will have expired.
+ * A per-receipt path, `receipts.<id>`, so two receipts saving at once can't
+ * overwrite each other. The condition is also what stops a parse for a
+ * removed receipt quietly bringing it back.
+ *
+ * A row written before `receipts` existed has no map to write into, so it
+ * gets the whole map instead, with its old top-level body removed. Such rows
+ * hold one receipt, so there's no sibling to lose; the last of them expires
+ * 24 hours after 2026-10-27T17:47Z, after which the fallback can go with
+ * `fromLegacy`.
  */
-export async function saveReceipts(
-  billId: string,
-  receipts: Record<string, Receipt>,
+export async function saveReceipt(
+  bill: Bill,
+  receipt: Receipt,
   status?: BillStatus,
+): Promise<boolean> {
+  const names: Record<string, string> = { '#receipts': 'receipts', '#rid': receipt.receiptId };
+  const values: Record<string, unknown> = { ':r': receipt };
+  let set = '#receipts.#rid = :r';
+  if (status) {
+    names['#status'] = 'status';
+    values[':st'] = status;
+    set += ', #status = :st';
+  }
+
+  try {
+    await client.send(
+      new UpdateCommand({
+        TableName: config.tableName(),
+        Key: { billId: bill.billId },
+        UpdateExpression: `SET ${set}`,
+        ConditionExpression: 'attribute_exists(#receipts.#rid)',
+        ExpressionAttributeNames: names,
+        ExpressionAttributeValues: values,
+      }),
+    );
+    return true;
+  } catch (err) {
+    if (!conditionFailed(err)) throw err;
+  }
+
+  try {
+    await client.send(
+      new UpdateCommand({
+        TableName: config.tableName(),
+        Key: { billId: bill.billId },
+        UpdateExpression:
+          `SET #receipts = :all${status ? ', #status = :st' : ''} ` +
+          'REMOVE merchant, currency, subtotal, #total, factor, units, serviceCharge, gst, discount',
+        ConditionExpression: 'attribute_not_exists(#receipts)',
+        ExpressionAttributeNames: {
+          '#receipts': 'receipts',
+          '#total': 'total',
+          ...(status ? { '#status': 'status' } : {}),
+        },
+        ExpressionAttributeValues: {
+          ':all': { ...bill.receipts, [receipt.receiptId]: receipt },
+          ...(status ? { ':st': status } : {}),
+        },
+      }),
+    );
+    log.info('legacy bill rewritten with receipts', { billId: bill.billId });
+    return true;
+  } catch (err) {
+    // The row has a receipts map after all, just not this receipt in it.
+    if (conditionFailed(err)) return false;
+    throw err;
+  }
+}
+
+/**
+ * Adds a receipt — a placeholder whose photo is about to be read — and
+ * restarts the bill's retention clock, since adding to it is using it.
+ *
+ * The cap is checked in the same conditional write, so two adds racing for
+ * the last slot can't both get it.
+ */
+export async function addReceipt(
+  billId: string,
+  receipt: Receipt,
+  maxReceipts: number,
+): Promise<'added' | 'full' | 'missing'> {
+  try {
+    await client.send(
+      new UpdateCommand({
+        TableName: config.tableName(),
+        Key: { billId },
+        UpdateExpression: 'SET #receipts.#rid = :r, #ttl = :ttl',
+        ConditionExpression: 'attribute_exists(#receipts) AND size(#receipts) < :max',
+        ExpressionAttributeNames: { '#receipts': 'receipts', '#rid': receipt.receiptId, '#ttl': 'ttl' },
+        ExpressionAttributeValues: { ':r': receipt, ':ttl': ttlFromNow(), ':max': maxReceipts },
+      }),
+    );
+    return 'added';
+  } catch (err) {
+    if (!conditionFailed(err)) throw err;
+  }
+  // Which condition failed isn't reported, so look. A bill that's gone also
+  // has no receipts attribute, which is why the add couldn't tell them apart.
+  const bill = await getBill(billId);
+  return bill ? 'full' : 'missing';
+}
+
+/**
+ * Removes one receipt. Refuses — returns false — when it's the last one, or
+ * already gone: a bill with no receipts has nothing to split.
+ */
+export async function removeReceipt(billId: string, receiptId: string): Promise<boolean> {
+  try {
+    await client.send(
+      new UpdateCommand({
+        TableName: config.tableName(),
+        Key: { billId },
+        UpdateExpression: 'REMOVE #receipts.#rid',
+        ConditionExpression: 'attribute_exists(#receipts.#rid) AND size(#receipts) > :one',
+        ExpressionAttributeNames: { '#receipts': 'receipts', '#rid': receiptId },
+        ExpressionAttributeValues: { ':one': 1 },
+      }),
+    );
+    return true;
+  } catch (err) {
+    if (conditionFailed(err)) return false;
+    throw err;
+  }
+}
+
+/**
+ * Marks a receipt unreadable. For a bill's first receipt the whole bill is,
+ * too — there's nothing else on it — and `note` goes on the bill, where the
+ * Mini App looks for it. A receipt removed in the meantime is left removed.
+ */
+export async function markReceiptFailed(
+  billId: string,
+  receiptId: string,
+  reason: string,
+  wholeBill: boolean,
 ): Promise<void> {
+  try {
+    await client.send(
+      new UpdateCommand({
+        TableName: config.tableName(),
+        Key: { billId },
+        UpdateExpression:
+          'SET #receipts.#rid.#status = :err, #receipts.#rid.note = :n' +
+          (wholeBill ? ', #status = :err, note = :n' : ''),
+        ConditionExpression: 'attribute_exists(#receipts.#rid)',
+        ExpressionAttributeNames: { '#receipts': 'receipts', '#rid': receiptId, '#status': 'status' },
+        ExpressionAttributeValues: { ':err': 'error', ':n': reason },
+      }),
+    );
+  } catch (err) {
+    if (!conditionFailed(err)) throw err;
+  }
+}
+
+/**
+ * "The next photo this person sends belongs on this bill" — set by the Add
+ * another receipt button, consumed by that photo.
+ *
+ * Short-lived on purpose: a photo sent hours later is far more likely a new
+ * meal than the rest of the old one. Keyed by Telegram id, as the bill's own
+ * `adminId` is, and gone within minutes.
+ */
+const ATTACH_TTL_SECONDS = 15 * 60;
+
+export async function setAttach(userId: number, billId: string): Promise<void> {
   await client.send(
-    new UpdateCommand({
+    new PutCommand({
       TableName: config.tableName(),
-      Key: { billId },
-      // The REMOVE tidies a legacy row's old top-level body on its first save,
-      // so a stale copy can't sit beside the real one. A no-op on any other row.
-      UpdateExpression:
-        (status ? 'SET #receipts = :r, #status = :st ' : 'SET #receipts = :r ') +
-        'REMOVE merchant, currency, subtotal, #total, factor, units, serviceCharge, gst, discount',
-      ExpressionAttributeNames: {
-        '#receipts': 'receipts',
-        '#total': 'total',
-        ...(status ? { '#status': 'status' } : {}),
-      },
-      ExpressionAttributeValues: status ? { ':r': receipts, ':st': status } : { ':r': receipts },
+      Item: { billId: `att#${userId}`, target: billId, ttl: now() + ATTACH_TTL_SECONDS },
     }),
   );
+}
+
+/**
+ * Consumes the marker, returning the bill it names, or null. A delete that
+ * returns what it deleted, so two photos sent together can't both claim it.
+ */
+export async function takeAttach(userId: number): Promise<string | null> {
+  const result = await client.send(
+    new DeleteCommand({
+      TableName: config.tableName(),
+      Key: { billId: `att#${userId}` },
+      ReturnValues: 'ALL_OLD',
+    }),
+  );
+  const item = result.Attributes as { target?: string; ttl?: number } | undefined;
+  if (!item?.target || typeof item.ttl !== 'number' || item.ttl <= now()) return null;
+  return item.target;
 }
 
 export async function saveShares(
@@ -173,22 +340,6 @@ export async function saveShares(
         // action — which is simple to explain and nearly as short.
         ':ttl': ttlFromNow(),
       },
-    }),
-  );
-}
-
-export async function setStatus(
-  billId: string,
-  status: BillStatus,
-  note?: string,
-): Promise<void> {
-  await client.send(
-    new UpdateCommand({
-      TableName: config.tableName(),
-      Key: { billId },
-      UpdateExpression: 'SET #status = :st, note = :n',
-      ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: { ':st': status, ':n': note ?? null },
     }),
   );
 }

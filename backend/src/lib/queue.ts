@@ -10,12 +10,8 @@ const sqs = new SQSClient({});
  */
 export interface ParseJob {
   billId: string;
-  /**
-   * Which of the bill's receipts this photo is. Optional only so a job
-   * enqueued before receipts existed still parses — as the bill's first
-   * receipt, which is what getBill reads its legacy row as.
-   */
-  receiptId?: string;
+  /** Which of the bill's receipts this photo is. */
+  receiptId: string;
   fileId: string;
   mediaType: ImageMediaType;
   /** Where to edit the "Reading receipt…" placeholder once we're done. */
@@ -37,7 +33,7 @@ export function isParseJob(value: unknown): value is ParseJob {
   const job = value as Partial<ParseJob>;
   return (
     typeof job.billId === 'string' &&
-    (job.receiptId === undefined || typeof job.receiptId === 'string') &&
+    typeof job.receiptId === 'string' &&
     typeof job.fileId === 'string' &&
     typeof job.mediaType === 'string' &&
     typeof job.chatId === 'number' &&

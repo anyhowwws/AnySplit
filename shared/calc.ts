@@ -129,6 +129,7 @@ export function computeShares(
 
 /** What the split needs from a receipt. Satisfied by `Receipt` itself. */
 export interface ReceiptAmounts {
+  receiptId: string;
   units: Unit[];
   factor: number;
   total: number;
@@ -140,10 +141,11 @@ export interface ReceiptAmounts {
  * Each receipt is split on its own by `computeShares` — its own factor, its
  * own reconciliation to its own total — and only then summed per person. So
  * every receipt's shares still add to exactly what was paid on it, and the
- * bill's add to the sum of those. With one receipt this is `computeShares`,
- * unchanged.
+ * bill's add to the sum of those. With one receipt the amounts are exactly
+ * `computeShares`'s.
  *
- * `idx`, `name` and `unitIds` follow `people`; `cents` is the cross-receipt sum.
+ * `idx`, `name` and `unitIds` follow `people`; `cents` is the cross-receipt
+ * sum, and `byReceipt` what it's made of.
  */
 export function computeBillShares(
   receipts: ReceiptAmounts[],
@@ -179,6 +181,9 @@ export function computeBillShares(
     name: person.name,
     unitIds: [...new Set(person.unitIds)],
     cents: perReceipt.reduce((sum, shares) => sum + shares[idx]!.cents, 0),
+    byReceipt: Object.fromEntries(
+      receipts.map((receipt, r) => [receipt.receiptId, perReceipt[r]![idx]!.cents]),
+    ),
   }));
 }
 

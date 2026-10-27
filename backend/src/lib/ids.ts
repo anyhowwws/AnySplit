@@ -31,3 +31,13 @@ export function parseStartPayload(payload: string): { billId: string; shareIdx: 
   if (!/^\d{1,2}$/.test(rawIdx)) return null;
   return { billId, shareIdx: Number(rawIdx) };
 }
+
+/**
+ * Id for a bill's second and later receipts: "r" plus 4 random base64url
+ * chars. Random rather than counted so an id is never reused on a bill — a
+ * parse still in flight for a removed receipt must not land in a new one.
+ * Short, because it prefixes every unit id and those are capped at 16 chars.
+ */
+export function newReceiptId(): string {
+  return `r${randomBytes(3).toString('base64url')}`;
+}
