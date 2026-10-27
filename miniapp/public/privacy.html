@@ -75,10 +75,11 @@
   <body>
     <main>
       <h1>AnySplit — Privacy Policy</h1>
-      <p class="sub">Last updated 3 September 2026</p>
+      <p class="sub">Last updated 28 October 2026</p>
 
       <p>
-        AnySplit is a Telegram bot that splits a restaurant bill from a photo of the receipt.
+        AnySplit is a Telegram bot that splits a restaurant bill from a photo of the receipt —
+        or from several, for a night with more than one bill.
         This policy describes exactly what it receives, what it keeps, and for how long.
         It replaces Telegram's
         <a href="https://telegram.org/privacy-tpa">Standard Bot Privacy Policy</a> for this bot.
@@ -100,10 +101,10 @@
 
       <h2>2. What AnySplit receives</h2>
       <ul>
-        <li><strong>The receipt photo</strong> you send to the bot.</li>
+        <li><strong>The receipt photos</strong> you send to the bot.</li>
         <li><strong>Your Telegram user ID</strong>, supplied by Telegram so the bot can reply to you and can tell your bill apart from someone else's.</li>
         <li><strong>Names you type</strong> for the people you're splitting with. These are free text — they can be nicknames, initials, or anything you like.</li>
-        <li><strong>Optionally, a name and phone number</strong> for whoever should be paid back, if you choose to enter one.</li>
+        <li><strong>Optionally, who paid</strong> — a name and phone number for whoever should be paid back. On a bill with several receipts, a different person may have paid each one, so there can be one per receipt.</li>
       </ul>
       <p>
         AnySplit does not ask for, and cannot see, your phone number, contact list, other chats,
@@ -118,19 +119,24 @@
           </thead>
           <tbody>
             <tr>
-              <td>Receipt photo</td>
+              <td>Receipt photos</td>
               <td><strong>Never stored</strong></td>
               <td>Held in memory only while being read, then discarded</td>
             </tr>
             <tr>
-              <td>Payee phone number</td>
+              <td>Phone numbers of whoever paid</td>
               <td><strong>Never stored</strong></td>
               <td>Used only to write your messages, then discarded</td>
             </tr>
             <tr>
-              <td>Bill contents — merchant, items, prices, the names you entered, each person's share</td>
+              <td>Bill contents — for each receipt, the merchant, items and prices; the names you entered; who paid which receipt; each person's share; and your Telegram user ID, so only you can open the bill</td>
               <td>Yes, temporarily</td>
               <td>Deleted automatically <strong>24 hours</strong> after you last work on it. Sending doesn't end it, so a split can still be corrected or re-sent</td>
+            </tr>
+            <tr>
+              <td>A note that your next photo belongs on an existing bill — your Telegram user ID and that bill — set when you tap <em>Add another receipt</em></td>
+              <td>Yes, briefly</td>
+              <td>Gone when that photo arrives, when you tap <em>Cancel</em>, or after <strong>15 minutes</strong>, whichever is first</td>
             </tr>
             <tr>
               <td>Operational logs — timings, error messages, counts</td>
@@ -146,8 +152,11 @@
         </table>
       </div>
       <p>
-        Your Telegram user ID is never stored as itself. Everywhere it would appear — in the logs
-        and in the usage tally — it is replaced by an irreversible keyed hash, so both can answer
+        Your Telegram user ID is kept as itself in only two places, both short-lived: on each bill
+        you start, so that nobody else can open or change it, and in the 15-minute note above.
+        Both are deleted with the rest of the bill or note. Everywhere else it would appear — the
+        logs, the usage tally, and the counters that limit how many receipts one person can send —
+        it is replaced by an irreversible keyed hash, so they can answer
         <em>how many people use this bot</em> without being able to say who they are. The hash
         cannot be turned back into your ID, or matched to you by anyone who obtained it.
       </p>
@@ -173,8 +182,8 @@
 
       <h2>5. Phone numbers you enter for someone else</h2>
       <p>
-        If you enter a phone number so people know who to pay back, that number is used only to
-        write it into the messages you forward, and is never saved. Please only enter someone
+        If you enter phone numbers so people know who to pay back, they are used only to write
+        them into the messages you forward, and are never saved. Please only enter someone
         else's number if they are happy for you to share it with the people you're splitting
         with.
       </p>
