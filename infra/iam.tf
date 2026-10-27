@@ -37,6 +37,21 @@ data "aws_iam_policy_document" "api" {
     resources = [aws_dynamodb_table.bills.arn]
   }
 
+  # Consuming an "Add another receipt" marker is a delete that returns what it
+  # deleted, so two photos can't both claim it. Limited to the att# markers:
+  # bills themselves are only ever removed by TTL, never by this function.
+  statement {
+    sid       = "ConsumeAttachMarkers"
+    effect    = "Allow"
+    actions   = ["dynamodb:DeleteItem"]
+    resources = [aws_dynamodb_table.bills.arn]
+    condition {
+      test     = "ForAllValues:StringLike"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["att#*"]
+    }
+  }
+
   statement {
     sid       = "Enqueue"
     effect    = "Allow"
