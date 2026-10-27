@@ -302,15 +302,26 @@ export async function setAttach(userId: number, billId: string): Promise<void> {
 /**
  * Consumes the marker, returning the bill it names, or null. A delete that
  * returns what it deleted, so two photos sent together can't both claim it.
+ *
+ * Fails open to null, like claimUpdate: every photo passes through here, so a
+ * failure must cost at most the attachment — the photo still starts a bill of
+ * its own — never the photo itself. Logged at error, because it means the
+ * button has silently stopped working.
  */
 export async function takeAttach(userId: number): Promise<string | null> {
-  const result = await client.send(
-    new DeleteCommand({
-      TableName: config.tableName(),
-      Key: { billId: `att#${userId}` },
-      ReturnValues: 'ALL_OLD',
-    }),
-  );
+  let result;
+  try {
+    result = await client.send(
+      new DeleteCommand({
+        TableName: config.tableName(),
+        Key: { billId: `att#${userId}` },
+        ReturnValues: 'ALL_OLD',
+      }),
+    );
+  } catch (err) {
+    log.error('attach marker read failed, starting a new bill', { err: String(err) });
+    return null;
+  }
   const item = result.Attributes as { target?: string; ttl?: number } | undefined;
   if (!item?.target || typeof item.ttl !== 'number' || item.ttl <= now()) return null;
   return item.target;
