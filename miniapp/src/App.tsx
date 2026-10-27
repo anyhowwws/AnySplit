@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Bill, SendMode, Share, Unit } from '../../shared/types.ts';
-import { CalcError, computeShares, deriveFactor, subtotalOf } from '../../shared/calc.ts';
+import { CalcError, computeBillShares, deriveFactor, subtotalOf } from '../../shared/calc.ts';
 import { DEFAULT_CURRENCY } from '../../shared/currency.ts';
 import { type Payee } from '../../shared/payee.ts';
+import { onlyReceipt } from '../../shared/receipts.ts';
 import { ApiRequestError, fetchBill, finaliseBill, patchBill } from './lib/api.ts';
 import {
   alertUser,
@@ -35,6 +36,9 @@ export function App() {
 
   // Working copies. The server holds the truth; these are the admin's edits
   // until the PATCH on leaving Review.
+  // The receipt being edited. A bill holds exactly one for now.
+  const [receiptId, setReceiptId] = useState<string | undefined>(undefined);
+  const [note, setNote] = useState<string | undefined>(undefined);
   const [merchant, setMerchant] = useState('');
   const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
   const [units, setUnits] = useState<Unit[]>([]);
@@ -53,10 +57,13 @@ export function App() {
     try {
       const { bill: loaded } = await fetchBill(billId);
       setBill(loaded);
-      setMerchant(loaded.merchant);
-      setCurrency(loaded.currency);
-      setUnits(loaded.units);
-      setTotalCents(loaded.total);
+      const receipt = onlyReceipt(loaded);
+      setReceiptId(receipt.receiptId);
+      setNote(receipt.note);
+      setMerchant(receipt.merchant);
+      setCurrency(receipt.currency);
+      setUnits(receipt.units);
+      setTotalCents(receipt.total);
       setLoadError(null);
 
       // Re-opening a bill that was already sent: rebuild the working state from
@@ -119,7 +126,7 @@ export function App() {
   const preview = useMemo<{ shares: Share[] } | { error: string }>(() => {
     if (step !== 'summary') return { shares: [] };
     try {
-      return { shares: computeShares(units, factor, totalCents, people) };
+      return { shares: computeBillShares([{ units, factor, total: totalCents }], people) };
     } catch (err) {
       return { error: err instanceof CalcError ? err.message : 'Could not work out the split.' };
     }
@@ -130,15 +137,17 @@ export function App() {
     setBusy(true);
     try {
       const { bill: updated } = await patchBill(bill.billId, {
+        receiptId,
         merchant,
         currency,
         total: totalCents,
         units,
       });
       setBill(updated);
-      setUnits(updated.units);
+      const saved = onlyReceipt(updated);
+      setUnits(saved.units);
       // Any unit the admin deleted must not linger in the assignment map.
-      const live = new Set(updated.units.map((u) => u.id));
+      const live = new Set(saved.units.map((u) => u.id));
       setAssignment((current) =>
         Object.fromEntries(Object.entries(current).filter(([id]) => live.has(id))),
       );
@@ -273,7 +282,7 @@ export function App() {
           setUnits={setUnits}
           totalCents={totalCents}
           setTotalCents={setTotalCents}
-          note={bill.note}
+          note={note}
           onNext={() => void saveAndContinue()}
           busy={busy}
         />

@@ -1,6 +1,7 @@
 import type { Bot, Context } from 'grammy';
 import type { Bill } from '../../../shared/types.ts';
 import { DEFAULT_CURRENCY } from '../../../shared/currency.ts';
+import { FIRST_RECEIPT_ID } from '../../../shared/receipts.ts';
 import { config } from './config.ts';
 import { getBill, putBill, recordUse, ttlFromNow } from './db.ts';
 import {
@@ -16,7 +17,7 @@ import {
 import { claimParse } from './ratelimit.ts';
 import { FIXTURES, fixtureNames } from './fixtures.ts';
 import { newBillId, parseStartPayload } from './ids.ts';
-import { deriveBill } from './receipt.ts';
+import { deriveReceipt } from './receipt.ts';
 import { addLogContext, errorFields, log } from './log.ts';
 import { enqueueParse } from './queue.ts';
 import { imageFrom, miniAppUrl, privacyUrl } from './telegram.ts';
@@ -107,15 +108,21 @@ async function handleImage(ctx: Context): Promise<void> {
   const bill: Bill = {
     billId,
     adminId: ctx.from.id,
-    merchant: '',
-    // Overwritten once the vision call reads the receipt's actual currency;
-    // this placeholder only needs to satisfy the type until then.
-    currency: DEFAULT_CURRENCY,
-    subtotal: 0,
-    total: 0,
-    factor: 1,
+    receipts: {
+      [FIRST_RECEIPT_ID]: {
+        receiptId: FIRST_RECEIPT_ID,
+        seq: 0,
+        merchant: '',
+        // Overwritten once the vision call reads the receipt's actual currency;
+        // this placeholder only needs to satisfy the type until then.
+        currency: DEFAULT_CURRENCY,
+        subtotal: 0,
+        total: 0,
+        factor: 1,
+        units: [],
+      },
+    },
     status: 'parsing',
-    units: [],
     shares: [],
     ttl: ttlFromNow(),
   };
@@ -126,6 +133,7 @@ async function handleImage(ctx: Context): Promise<void> {
   try {
     await enqueueParse({
       billId,
+      receiptId: FIRST_RECEIPT_ID,
       fileId: ref.fileId,
       mediaType: ref.mediaType,
       chatId: placeholder.chat.id,
@@ -149,7 +157,7 @@ async function handleImage(ctx: Context): Promise<void> {
  * Creates a bill from a canned receipt, skipping the photo and the vision call.
  *
  * Everything downstream is the real thing: the fixture goes through the same
- * `deriveBill` the parser uses, lands in DynamoDB the same way, and opens the
+ * `deriveReceipt` the parser uses, lands in DynamoDB the same way, and opens the
  * same Mini App. Only the model call is skipped — which is the part that costs
  * money on every iteration and is the least likely thing to be broken.
  *
@@ -186,14 +194,14 @@ async function handleTest(ctx: Context, name: string): Promise<void> {
   const billId = newBillId();
   addLogContext({ billId, fixture: name });
 
-  const derived = deriveBill(fixture.receipt);
+  const receipt = deriveReceipt(fixture.receipt, FIRST_RECEIPT_ID, 0);
   const bill: Bill = {
     billId,
     adminId: ctx.from.id,
+    receipts: { [receipt.receiptId]: receipt },
     status: 'review',
     shares: [],
     ttl: ttlFromNow(),
-    ...derived,
   };
 
   await putBill(bill);
@@ -202,7 +210,7 @@ async function handleTest(ctx: Context, name: string): Promise<void> {
   await ctx.reply(`🧪 <i>Test receipt — nothing was read, no vision call made.</i>`, {
     parse_mode: 'HTML',
   });
-  await ctx.reply(parsedSummary(bill), {
+  await ctx.reply(parsedSummary(receipt), {
     parse_mode: 'HTML',
     reply_markup: {
       inline_keyboard: [[{ text: splitButtonLabel(bill), web_app: { url: miniAppUrl(billId) } }]],

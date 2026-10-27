@@ -25,15 +25,20 @@ export function deriveFactor(subtotal: number, total: number): number {
   return total / subtotal;
 }
 
-/** Expands `qty` into individual units. `2x Beer $12.00` -> two 600c units. */
-export function expandUnits(receipt: ParsedReceipt): Unit[] {
+/**
+ * Expands `qty` into individual units. `2x Beer $12.00` -> two 600c units.
+ *
+ * `prefix` keeps ids unique across a bill's receipts: the receipt's id, so
+ * receipt r1's units are r1u0, r1u1, …
+ */
+export function expandUnits(receipt: ParsedReceipt, prefix = ''): Unit[] {
   const units: Unit[] = [];
   let seq = 0;
   for (const item of receipt.items) {
     const qty = Math.max(1, Math.trunc(item.qty));
     for (let i = 0; i < qty; i++) {
       units.push({
-        id: `u${seq++}`,
+        id: `${prefix}u${seq++}`,
         name: item.rawName,
         displayName: item.displayName || item.rawName,
         cents: item.unitPriceCents,
@@ -119,6 +124,61 @@ export function computeShares(
     name: person.name,
     unitIds: person.unitIds,
     cents: rounded[idx]!,
+  }));
+}
+
+/** What the split needs from a receipt. Satisfied by `Receipt` itself. */
+export interface ReceiptAmounts {
+  units: Unit[];
+  factor: number;
+  total: number;
+}
+
+/**
+ * Per-person totals across every receipt on a bill.
+ *
+ * Each receipt is split on its own by `computeShares` — its own factor, its
+ * own reconciliation to its own total — and only then summed per person. So
+ * every receipt's shares still add to exactly what was paid on it, and the
+ * bill's add to the sum of those. With one receipt this is `computeShares`,
+ * unchanged.
+ *
+ * `idx`, `name` and `unitIds` follow `people`; `cents` is the cross-receipt sum.
+ */
+export function computeBillShares(
+  receipts: ReceiptAmounts[],
+  people: PersonAssignment[],
+): Share[] {
+  if (receipts.length === 0) throw new CalcError('no receipts to split');
+  if (people.length === 0) throw new CalcError('no people to split between');
+
+  // computeShares rejects an unknown id; filtering per receipt below would
+  // otherwise drop one silently, so check against the whole bill first.
+  const known = new Set(receipts.flatMap((receipt) => receipt.units.map((u) => u.id)));
+  for (const person of people) {
+    for (const id of person.unitIds) {
+      if (!known.has(id)) throw new CalcError(`unknown unit id: ${id}`);
+    }
+  }
+
+  const perReceipt = receipts.map((receipt) => {
+    const ids = new Set(receipt.units.map((u) => u.id));
+    return computeShares(
+      receipt.units,
+      receipt.factor,
+      receipt.total,
+      people.map((person) => ({
+        name: person.name,
+        unitIds: person.unitIds.filter((id) => ids.has(id)),
+      })),
+    );
+  });
+
+  return people.map((person, idx) => ({
+    idx,
+    name: person.name,
+    unitIds: [...new Set(person.unitIds)],
+    cents: perReceipt.reduce((sum, shares) => sum + shares[idx]!.cents, 0),
   }));
 }
 

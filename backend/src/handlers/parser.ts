@@ -1,8 +1,9 @@
 import type { SQSBatchResponse, SQSEvent, SQSRecord } from 'aws-lambda';
 import type { Bill } from '../../../shared/types.ts';
 import { parseFailureText, registerHandlers } from '../lib/bot.ts';
-import { deriveBill } from '../lib/receipt.ts';
-import { getBill, saveParse, setStatus } from '../lib/db.ts';
+import { FIRST_RECEIPT_ID } from '../../../shared/receipts.ts';
+import { deriveReceipt } from '../lib/receipt.ts';
+import { getBill, saveReceipts, setStatus } from '../lib/db.ts';
 import { parsedSummary, splitButtonLabel } from '../lib/format.ts';
 import { addLogContext, errorFields, log, withLogContext } from '../lib/log.ts';
 import { cropToReceipt } from '../lib/preprocess.ts';
@@ -101,24 +102,16 @@ async function parseAndSave(
 
   const receipt = await parseReceipt(crop.image);
 
-  const derived = deriveBill(receipt);
+  const receiptId = job.receiptId ?? FIRST_RECEIPT_ID;
+  const seq = bill.receipts[receiptId]?.seq ?? 0;
+  const derived = deriveReceipt(receipt, receiptId, seq);
   if (derived.units.length === 0) throw new VisionError("couldn't find any line items");
 
-  await saveParse(bill.billId, {
-    merchant: derived.merchant,
-    currency: derived.currency,
-    subtotal: derived.subtotal,
-    total: derived.total,
-    factor: derived.factor,
-    units: derived.units,
-    serviceCharge: derived.serviceCharge,
-    gst: derived.gst,
-    discount: derived.discount,
-    status: 'review',
-    note: derived.note,
-  });
+  const receipts = { ...bill.receipts, [receiptId]: derived };
+  await saveReceipts(bill.billId, receipts, 'review');
 
   log.info('receipt parsed', {
+    receiptId,
     items: receipt.items.length,
     units: derived.units.length,
     subtotal: derived.subtotal,
@@ -128,9 +121,9 @@ async function parseAndSave(
     ms: Date.now() - started,
   });
 
-  const updated: Bill = { ...bill, ...derived, status: 'review' };
+  const updated: Bill = { ...bill, receipts, status: 'review' };
 
-  await bot.api.editMessageText(job.chatId, job.messageId, parsedSummary(updated), {
+  await bot.api.editMessageText(job.chatId, job.messageId, parsedSummary(derived), {
     parse_mode: 'HTML',
     reply_markup: {
       inline_keyboard: [

@@ -1,4 +1,5 @@
-import type { Bill, Share, Unit } from '../../../shared/types.ts';
+import type { Bill, Receipt, Share, Unit } from '../../../shared/types.ts';
+import { allUnits, onlyReceipt, receiptsOf } from '../../../shared/receipts.ts';
 import { moneyFormatter } from './money.ts';
 import { currencyInfo } from '../../../shared/currency.ts';
 // Type-only: this module stays pure presentation, with no path from here to
@@ -36,30 +37,30 @@ export function groupUnits(units: Unit[]): { label: string; qty: number; cents: 
 const MERCHANT_FALLBACK = 'Dining expenses';
 
 /** The message that replaces "Reading receipt…" once the parse lands. */
-export function parsedSummary(bill: Bill): string {
-  const money = moneyFormatter(bill.currency);
-  const taxLabel = currencyInfo(bill.currency).taxLabel;
+export function parsedSummary(receipt: Receipt): string {
+  const money = moneyFormatter(receipt.currency);
+  const taxLabel = currencyInfo(receipt.currency).taxLabel;
 
   const lines: string[] = [];
-  lines.push(`<b>${esc(bill.merchant || MERCHANT_FALLBACK)}</b>`);
+  lines.push(`<b>${esc(receipt.merchant || MERCHANT_FALLBACK)}</b>`);
   lines.push('');
 
-  for (const group of groupUnits(bill.units)) {
+  for (const group of groupUnits(receipt.units)) {
     const qty = group.qty > 1 ? `${group.qty}× ` : '';
     lines.push(`${qty}${esc(group.label)} — ${money(group.cents)}`);
   }
 
   lines.push('');
-  lines.push(`Subtotal: ${money(bill.subtotal)}`);
+  lines.push(`Subtotal: ${money(receipt.subtotal)}`);
   // Receipt order: discount comes off before service and GST are added.
-  if (bill.discount) lines.push(`Discount: −${money(bill.discount)}`);
-  if (bill.serviceCharge) lines.push(`Service: ${money(bill.serviceCharge)}`);
-  if (bill.gst) lines.push(`${taxLabel}: ${money(bill.gst)}`);
-  lines.push(`<b>Total: ${money(bill.total)}</b>`);
+  if (receipt.discount) lines.push(`Discount: −${money(receipt.discount)}`);
+  if (receipt.serviceCharge) lines.push(`Service: ${money(receipt.serviceCharge)}`);
+  if (receipt.gst) lines.push(`${taxLabel}: ${money(receipt.gst)}`);
+  lines.push(`<b>Total: ${money(receipt.total)}</b>`);
 
-  if (bill.note) {
+  if (receipt.note) {
     lines.push('');
-    lines.push(`⚠️ ${esc(bill.note)}`);
+    lines.push(`⚠️ ${esc(receipt.note)}`);
   }
 
   lines.push('');
@@ -77,7 +78,9 @@ export function parsedSummary(bill: Bill): string {
  * that bill needs a correction, not just a glance.
  */
 export function splitButtonLabel(bill: Bill): string {
-  return bill.note ? 'Fix the numbers & split' : 'Review & split';
+  return receiptsOf(bill).some((receipt) => receipt.note)
+    ? 'Fix the numbers & split'
+    : 'Review & split';
 }
 
 /**
@@ -136,12 +139,13 @@ export function consolidatedMessage(
   botUsername: string,
   payee?: PayeeLike,
 ): string {
-  const money = moneyFormatter(bill.currency);
+  const receipt = onlyReceipt(bill);
+  const money = moneyFormatter(receipt.currency);
 
   /** `maxItems: Infinity` lists everything; a number truncates with "+N more". */
   const build = (maxItems: number): string => {
     const lines: string[] = [];
-    lines.push(`🧾 <b>${esc(bill.merchant || MERCHANT_FALLBACK)}</b> — ${money(bill.total)}`);
+    lines.push(`🧾 <b>${esc(receipt.merchant || MERCHANT_FALLBACK)}</b> — ${money(receipt.total)}`);
     lines.push('');
 
     shares.forEach((share, index) => {
@@ -155,8 +159,8 @@ export function consolidatedMessage(
       }
     });
 
-    const breakdown = chargeBreakdown(bill);
-    const uplift = Math.round((bill.factor - 1) * 1000) / 10;
+    const breakdown = chargeBreakdown(receipt);
+    const uplift = Math.round((receipt.factor - 1) * 1000) / 10;
     const explanation = breakdown
       ? `Includes ${breakdown}.`
       : uplift < -0.05
@@ -204,8 +208,9 @@ export function consolidatedMessage(
  * itemised prices live. Truncates with "+N more" only when `max` demands it.
  */
 function itemLabels(bill: Bill, share: Share, max: number): string[] {
+  const billUnits = allUnits(bill);
   const units = share.unitIds
-    .map((id) => bill.units.find((u) => u.id === id))
+    .map((id) => billUnits.find((u) => u.id === id))
     .filter((u): u is Unit => u !== undefined);
   const grouped = groupUnits(units);
   const labels = grouped.map((g) => (g.qty > 1 ? `${g.qty} ${g.label}` : g.label));
@@ -220,7 +225,8 @@ export function recipientBreakdown(bill: Bill, share: Share, payee?: PayeeLike):
   // they have already paid, and what they actually want to know is what the meal
   // cost them and how much is coming back.
   const isPayer = payee?.personIndex !== undefined && payee.personIndex === share.idx;
-  const money = moneyFormatter(bill.currency);
+  const receipt = onlyReceipt(bill);
+  const money = moneyFormatter(receipt.currency);
 
   const lines: string[] = [];
   lines.push(
@@ -228,12 +234,12 @@ export function recipientBreakdown(bill: Bill, share: Share, payee?: PayeeLike):
       ? `<b>${esc(share.name)}, you spent ${money(share.cents)}</b>`
       : `<b>${esc(share.name)}, you owe ${money(share.cents)}</b>`,
   );
-  lines.push(`at ${esc(bill.merchant || 'this meal')}`);
+  lines.push(`at ${esc(receipt.merchant || 'this meal')}`);
   lines.push('');
 
   const claimCount = countClaims(bill);
   const units = share.unitIds
-    .map((id) => bill.units.find((u) => u.id === id))
+    .map((id) => receipt.units.find((u) => u.id === id))
     .filter((u): u is Unit => u !== undefined);
 
   for (const group of groupUnitsWithSharing(units, claimCount, money)) {
@@ -245,8 +251,8 @@ export function recipientBreakdown(bill: Bill, share: Share, payee?: PayeeLike):
   // could still derive the percentage from the total, and that number would be
   // arithmetically right while attributing it to "taxes and charges" we have no
   // evidence for. Saying nothing beats naming a charge that may not exist.
-  const breakdown = chargeBreakdown(bill);
-  const uplift = Math.round((bill.factor - 1) * 1000) / 10;
+  const breakdown = chargeBreakdown(receipt);
+  const uplift = Math.round((receipt.factor - 1) * 1000) / 10;
 
   const explanation = breakdown
     ? `Includes ${breakdown}.`
@@ -265,12 +271,12 @@ export function recipientBreakdown(bill: Bill, share: Share, payee?: PayeeLike):
   // ever appears, which is exactly why it needn't be stored.
   if (isPayer) {
     // Their own copy: what they put in, and what should come back.
-    const owedBack = bill.total - share.cents;
+    const owedBack = receipt.total - share.cents;
     lines.push('');
     lines.push(
       owedBack > 0
-        ? `You paid ${money(bill.total)}, so you're owed ${money(owedBack)} back.`
-        : `You paid ${money(bill.total)}.`,
+        ? `You paid ${money(receipt.total)}, so you're owed ${money(owedBack)} back.`
+        : `You paid ${money(receipt.total)}.`,
     );
   } else if (payee?.name) {
     lines.push('');
@@ -330,18 +336,18 @@ function groupUnitsWithSharing(
  * Returns null when the receipt itemised neither charge, in which case there
  * are no rates to quote and the caller falls back to describing the effect.
  */
-function chargeBreakdown(bill: Bill): string | null {
-  const service = bill.serviceCharge ?? 0;
-  const gst = bill.gst ?? 0;
-  const { taxLabel } = currencyInfo(bill.currency);
+function chargeBreakdown(receipt: Receipt): string | null {
+  const service = receipt.serviceCharge ?? 0;
+  const gst = receipt.gst ?? 0;
+  const { taxLabel } = currencyInfo(receipt.currency);
   const parts: string[] = [];
 
-  if (service > 0 && bill.subtotal > 0) {
-    parts.push(`${formatRate(service / bill.subtotal)}% service charge`);
+  if (service > 0 && receipt.subtotal > 0) {
+    parts.push(`${formatRate(service / receipt.subtotal)}% service charge`);
   }
   if (gst > 0) {
-    const gstBase = bill.subtotal + service;
-    if (service > 0 && bill.currency !== 'SGD') {
+    const gstBase = receipt.subtotal + service;
+    if (service > 0 && receipt.currency !== 'SGD') {
       parts.push(taxLabel.toLowerCase());
     } else if (gstBase > 0) {
       parts.push(`${formatRate(gst / gstBase)}% ${taxLabel}`);

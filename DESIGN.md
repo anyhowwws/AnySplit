@@ -326,20 +326,43 @@ architecturally is which fields are derived and which are decoration.
 |---|---|
 | `billId` | Partition key. 12-char base64url |
 | `adminId` | Telegram id of the payer. The only user allowed to read or mutate the bill |
+| `receipts` | Map of `receiptId` → receipt; fields below. One entry today |
+| `shares` | Populated on finalise, and rewritten on every re-finalise. Each is a person's sum across every receipt |
+| `ttl` | Epoch seconds. Re-checked on read |
+| `note` | Why the parse failed, when `status` is `error` |
+
+Each receipt:
+
+| Field | Note |
+|---|---|
+| `receiptId`, `seq` | `r0`, `r1`, … and the order the photos arrived in. The id prefixes its units' ids, so unit ids are unique across the bill |
 | `currency` | ISO 4217 code read off the receipt. Defaults to `SGD` — for the placeholder written before the vision call returns, and for bills written before multi-currency support existed at all |
 | `subtotal` | The sum of `units` — **not** the receipt's printed subtotal |
 | `total` | What was actually paid, in cents |
 | `factor` | `total / subtotal`. The only non-integer in the item, because it is a ratio, not money |
 | `units` | Quantities already expanded, one row per unit |
-| `shares` | Populated on finalise, and rewritten on every re-finalise |
-| `ttl` | Epoch seconds. Re-checked on read |
 | `serviceCharge`, `gst`, `discount` | As printed. **Display only** — no calculation reads them |
-| `note` | Parse warning or error, surfaced in the Mini App |
+| `note` | Parse warnings, surfaced on the Review screen |
 
 `subtotal` being the sum of units rather than the printed figure is the
 load-bearing choice: `factor` has to be relative to what actually gets divided
 up, or the shares will not add to the total. When the two disagree the parse still
 lands, `note` says so, and the payer reconciles it in the Review screen.
+
+**Why receipts are kept apart rather than pooled.** Service charge and tax don't
+stack the same way on every receipt — a restaurant's 10% + 9% and a hawker
+stall's nothing — so one `factor` across two receipts' items would overcharge
+some people and undercharge others. `computeBillShares` splits each receipt on
+its own with `computeShares` (its own factor, its own cent reconciliation) and
+only then sums per person, so each receipt's shares still add to exactly what
+was paid on it. With one receipt it *is* `computeShares`.
+
+`receipts` is a map rather than a list so that, once several receipts can be
+parsed at once, each parse can write its own entry. For now writes replace the
+whole map: a nested path can't be set on a row written before `receipts`
+existed, which `getBill` reads as a one-receipt bill and the first save tidies
+up. Those rows are gone within the 24-hour TTL, after which the per-receipt
+write is safe.
 
 Two other item shapes share the table rather than earning tables of their own:
 `upd#<update_id>`, written conditionally with a one-hour `ttl` to dedupe
@@ -498,8 +521,8 @@ read either rate.
 merchant and prices — the same "a model proposes, the admin confirms" posture
 as everything else there.
 
-**Bills from before this feature default to SGD on read**, in `getBill`
-(`backend/src/lib/db.ts`), rather than needing a backfill migration — SGD was
+**Bills from before this feature default to SGD on read**, in `getBill`'s
+legacy-row handling (`backend/src/lib/db.ts`), rather than needing a backfill migration — SGD was
 the only currency AnySplit understood before now, so an absent field and an
 explicit `SGD` mean the same thing for every bill written earlier.
 
