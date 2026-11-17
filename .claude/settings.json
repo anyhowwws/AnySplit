@@ -1,6 +1,7 @@
 {
-  "permissions": {
+  "autoMode": {
     "allow": [
+      "$defaults",
       "Bash",
       "Read",
       "Edit",
@@ -10,17 +11,34 @@
       "Skill(claude-api)",
       "Skill(claude-api:*)"
     ],
-    "deny": [
+    "soft_deny": [
+      "$defaults",
       "Bash(rm -rf /*)",
-      "Bash(terraform destroy *)",
-      "Bash(aws s3 rb *)",
-      "Bash(aws s3 rm *)",
-      "Bash(aws dynamodb delete-table *)",
-      "Bash(aws ssm delete-parameter *)",
-      "Bash(aws lambda delete-function *)",
-      "Bash(git push --force *)",
-      "Bash(git push -f *)",
+      "Bash(terraform destroy:*)",
+      "Bash(aws s3 rb:*)",
+      "Bash(aws s3 rm:*)",
+      "Bash(aws dynamodb delete-table:*)",
+      "Bash(aws ssm delete-parameter:*)",
+      "Bash(aws lambda delete-function:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Read(./**/.env)",
+      "Read(./**/.env.*)",
+      "Read(./**/*.tfstate)",
+      "Read(./**/*.tfstate.*)",
+      "Read(./**/*.tfvars)",
+      "Read(./**/*.key)",
+      "Read(./**/*.pem)",
+      "Read(./**/*-key.json)",
+      "Read(./**/credentials)",
       "Read(//Users/hows/.ssh/**)"
+    ],
+    "environment": [
+      "**Cloud provider(s)**: AWS — Telegram bot on Lambda + DynamoDB, Terraform-managed",
+      "**Repository visibility**: public (github.com/anyhowwws/AnySplit)",
+      "**Secrets management**: none in-repo — bot token / AWS creds are runtime-only, terraform.tfvars is git-ignored",
+      "**Sensitive data**: none in the repo itself, but this is a PUBLIC repo — never commit real tokens, user data, or infra output containing account details",
+      "**Trusted repo**: this checkout only"
     ]
   }
 }

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "miniapp-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "miniapp", "run", "dev"],
+      "port": 5173
+    }
+  ]
+}
