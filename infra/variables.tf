@@ -190,9 +190,12 @@ variable "vision_calls_per_hour_alarm" {
 variable "report_email" {
   description = <<-EOT
     Address that receives the daily usage digest (the receipt funnel, new users
-    today, total unique users) — see report.tf. Empty falls back to `alarm_email`, so
-    a deployment that only ever set one address still gets the report rather
-    than a topic with nobody subscribed to it.
+    today, total unique users) — see report.tf. Days with no receipt parsed send
+    nothing, unless receipts were submitted or failed.
+
+    Empty falls back to `alarm_email`, so a deployment that only ever set one
+    address still gets the report rather than a topic with nobody subscribed to
+    it.
 
     AWS sends a confirmation link on first apply; nothing arrives until it is
     clicked.
