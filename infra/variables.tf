@@ -41,6 +41,9 @@ variable "test_user_id" {
   EOT
   type        = string
   default     = ""
+  # Fed from a repository secret. Without this, any plan touching it prints
+  # the value into a public PR comment — see "comment plan on PR" in ci.yml.
+  sensitive = true
 }
 
 variable "github_repo" {
@@ -83,6 +86,9 @@ variable "alarm_email" {
   EOT
   type        = string
   default     = ""
+  # Fed from a repository secret. Without this, any plan touching it prints
+  # the value into a public PR comment — see "comment plan on PR" in ci.yml.
+  sensitive = true
 }
 
 # ------------------------------------------------- workload identity federation
@@ -100,18 +106,27 @@ variable "anthropic_federation_rule_id" {
   description = "Federation rule (fdrl_...) the token exchange targets. From Settings → Workload identity."
   type        = string
   default     = ""
+  # Fed from a repository secret. Without this, any plan touching it prints
+  # the value into a public PR comment — see "comment plan on PR" in ci.yml.
+  sensitive = true
 }
 
 variable "anthropic_organization_id" {
   description = "Anthropic organization UUID that owns the federation rule."
   type        = string
   default     = ""
+  # Fed from a repository secret. Without this, any plan touching it prints
+  # the value into a public PR comment — see "comment plan on PR" in ci.yml.
+  sensitive = true
 }
 
 variable "anthropic_service_account_id" {
   description = "Service account (svac_...) the minted token acts as."
   type        = string
   default     = ""
+  # Fed from a repository secret. Without this, any plan touching it prints
+  # the value into a public PR comment — see "comment plan on PR" in ci.yml.
+  sensitive = true
 }
 
 variable "anthropic_workspace_id" {
@@ -202,6 +217,9 @@ variable "report_email" {
   EOT
   type        = string
   default     = ""
+  # Fed from a repository secret. Without this, any plan touching it prints
+  # the value into a public PR comment — see "comment plan on PR" in ci.yml.
+  sensitive = true
 }
 
 variable "log_retention_days" {

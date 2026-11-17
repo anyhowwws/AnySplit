@@ -146,7 +146,9 @@ resource "aws_sns_topic" "alarms" {
 # Confirm the subscription from your inbox after the first apply — SNS won't
 # deliver until you click the link.
 resource "aws_sns_topic_subscription" "email" {
-  count     = var.alarm_email == "" ? 0 : 1
+  # The address is sensitive, and count may not depend on a sensitive value.
+  # Whether one is set at all is not a secret, so only that is unwrapped.
+  count     = nonsensitive(var.alarm_email != "") ? 1 : 0
   topic_arn = aws_sns_topic.alarms.arn
   protocol  = "email"
   endpoint  = var.alarm_email

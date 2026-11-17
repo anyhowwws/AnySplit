@@ -33,7 +33,9 @@ resource "aws_sns_topic" "reports" {
 # Same confirmation-link caveat as the alarm topic in monitoring.tf: nothing
 # arrives until the subscription is confirmed from the inbox.
 resource "aws_sns_topic_subscription" "report_email" {
-  count     = local.report_email == "" ? 0 : 1
+  # As in monitoring.tf: unwrap only whether an address is set, never the
+  # address, since count may not depend on a sensitive value.
+  count     = nonsensitive(local.report_email != "") ? 1 : 0
   topic_arn = aws_sns_topic.reports.arn
   protocol  = "email"
   endpoint  = local.report_email
