@@ -29,3 +29,9 @@ receipts/
 
 .DS_Store
 *.log
+
+# /brag launch-video renders: final MP4s, frame snapshots and the composition
+# they came from. Regenerable, tens of megabytes, and they bundle a licensed
+# third-party music track that a public repo would be redistributing. The
+# wildcard catches each style variant (brag-output-risograph/ and so on).
+brag-output*/
