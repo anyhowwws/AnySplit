@@ -195,6 +195,34 @@ resource "aws_cloudwatch_metric_alarm" "api_errors" {
   alarm_actions     = [aws_sns_topic.alarms.arn]
 }
 
+# The daily report deliberately sends nothing on a quiet day, so a missing email
+# stopped meaning anything was wrong — this is what replaced that signal. Any
+# error at all: a job that runs once a day leaves no room for a threshold.
+# EventBridge invokes asynchronously and Lambda retries a failed run twice, so
+# one bad night can count up to three errors; at a threshold of zero that only
+# changes the number in the email, not whether it is sent.
+#
+# This catches a run that crashes, not a run that never happens — a disabled
+# rule or a broken invoke permission produces no errors at all.
+resource "aws_cloudwatch_metric_alarm" "report_errors" {
+  alarm_name          = "${local.name}-report-errors"
+  comparison_operator = "GreaterThanThreshold"
+  threshold           = 0
+  evaluation_periods  = 1
+  period              = 3600
+  namespace           = "AWS/Lambda"
+  metric_name         = "Errors"
+  statistic           = "Sum"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.report.function_name
+  }
+
+  alarm_description = "The daily report Lambda failed; tonight's report may not have been sent."
+  alarm_actions     = [aws_sns_topic.alarms.arn]
+}
+
 # ------------------------------------------------------- security tripwires
 #
 # Threshold zero on both: these count events that should never happen once, so
