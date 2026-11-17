@@ -133,10 +133,23 @@ jobs:
           # printed to the job's own log. So the account id embedded in every
           # refreshed resource's ARN has to be stripped here by hand, or it
           # lands unmasked in a public, permanent PR comment.
+          #
+          # The same goes for every secret fed to Terraform. Those variables are
+          # marked `sensitive`, so the plan should already print them as
+          # "(sensitive value)" — but that is one forgotten flag away from
+          # failing, and it did fail: a personal email sat in two PR comments for
+          # months before anyone looked. So each TF_VAR_* value is stripped here
+          # too, which also covers any variable added later. Empty values are
+          # skipped, since splitting on "" would shred the whole plan.
           script: |
             let plan = (process.env.PLAN || '').slice(0, 60000);
             const accountId = process.env.ACCOUNT_ID;
             if (accountId) plan = plan.split(accountId).join('<account-id>');
+            for (const [name, value] of Object.entries(process.env)) {
+              if (name.startsWith('TF_VAR_') && value) {
+                plan = plan.split(value).join(`<${name.slice(7)}>`);
+              }
+            }
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
