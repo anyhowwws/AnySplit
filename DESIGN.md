@@ -732,6 +732,16 @@ REST call, and any scanner that found the URL into one figure that moved with UI
 chattiness rather than with anybody splitting a bill. It is a reasonable thing
 to alarm on and a poor thing to report.
 
+A day on which no receipt was parsed sends nothing: a run of all-zero emails
+teaches the reader to stop opening them, including on the day one matters. The
+skip is narrower than "nothing parsed", though. If receipts were submitted or
+failed and none were parsed, the parser is broken, and that is the zero most
+worth an email — the parse-failures alarm needs more than two in fifteen
+minutes, so a single lost receipt would otherwise reach nobody. Skipped runs
+log `daily report skipped: nothing parsed` with the full counts, because once
+silence is normal, a missing email no longer proves anything about whether the
+report ran.
+
 It is its own Lambda and IAM role rather than a branch inside `api`, scoped to
 `cloudwatch:GetMetricData`, `sns:Publish`, and one `dynamodb:GetItem` pinned by
 a `dynamodb:LeadingKeys` condition to the single key holding the user total — it

@@ -14,6 +14,12 @@ import { readUserCount } from '../lib/usercount.ts';
  * exists to answer. Every line is a count of events in the last 24 hours except
  * the last, which is cumulative.
  *
+ * A day on which no receipt was parsed sends nothing — an inbox of zeroes is
+ * noise, and noise trains people to stop reading the days that matter. The
+ * exception is a day on which receipts were submitted or failed yet none were
+ * parsed: that is not a quiet day, it is the parser being broken, and the one
+ * zero worth an email. See `isQuiet` below.
+ *
  * Nothing here can read a bill or touch the bot token. Beyond
  * cloudwatch:GetMetricData and sns:Publish it holds exactly one DynamoDB
  * permission: GetItem on the single `meta#users` counter, pinned to that key by
@@ -41,6 +47,28 @@ const ANYSPLIT = 'AnySplit';
  */
 function singaporeDate(at: Date): string {
   return new Date(at.getTime() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+interface Funnel {
+  receiptsSubmitted: number;
+  receiptsParsed: number;
+  parseFailures: number;
+}
+
+/**
+ * Whether the day is too quiet to be worth a report: no receipt parsed, and no
+ * sign that anyone tried.
+ *
+ * "Nothing parsed" alone is not enough. Zero parsed against one submitted means
+ * a receipt went in and nothing came out — exactly the failure the report would
+ * otherwise be the first to show, and the parse-failures alarm only fires on
+ * more than two in fifteen minutes, so a single lost receipt is invisible to
+ * it. Submitted and failed are both checked because the 24-hour window can cut
+ * a receipt's life in half: one sent at 21:59 and abandoned at 22:01 shows up
+ * as a failure today with its submission counted yesterday.
+ */
+export function isQuiet({ receiptsSubmitted, receiptsParsed, parseFailures }: Funnel): boolean {
+  return receiptsParsed === 0 && receiptsSubmitted === 0 && parseFailures === 0;
 }
 
 function required(name: string): string {
@@ -103,6 +131,24 @@ export async function handler(): Promise<void> {
       readUserCount(),
     ]);
 
+    const counts = {
+      receiptsSubmitted,
+      visionCalls,
+      receiptsParsed,
+      parseFailures,
+      splitsFinalised,
+      newUsers,
+      totalUsers,
+    };
+
+    // Logged rather than silently returned: with quiet days sending nothing, a
+    // missing email is no longer evidence the report is broken, so the log line
+    // is what proves this ran and chose not to.
+    if (isQuiet(counts)) {
+      log.info('daily report skipped: nothing parsed', counts);
+      return;
+    }
+
     // Title Case throughout, and padded here rather than by hand so a label can
     // be reworded without re-aligning the whole block.
     const rows: [string, number][] = [
@@ -131,15 +177,7 @@ export async function handler(): Promise<void> {
       }),
     );
 
-    log.info('daily report sent', {
-      receiptsSubmitted,
-      visionCalls,
-      receiptsParsed,
-      parseFailures,
-      splitsFinalised,
-      newUsers,
-      totalUsers,
-    });
+    log.info('daily report sent', counts);
   } catch (err) {
     log.error('daily report failed', errorFields(err));
     throw err;
