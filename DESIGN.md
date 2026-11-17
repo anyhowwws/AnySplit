@@ -704,6 +704,7 @@ log line nobody queries is not a detection:
 | `vision-call-volume` | >50 in 1 hour | Someone is spamming receipts at a bot with no rate limit. Each call is paid |
 | `parse-dlq-not-empty` | any message | A receipt failed three times |
 | `api-errors` | >5 in 5 min | The api Lambda is throwing before it can log |
+| `report-errors` | any error | The daily report crashed. Needed because a quiet day now sends no report, so silence is no longer a symptom |
 
 Every one sets `treat_missing_data = "notBreaching"`, because a metric filter's
 metric does not exist until it first matches — and missing reads as neither OK
@@ -740,7 +741,8 @@ worth an email — the parse-failures alarm needs more than two in fifteen
 minutes, so a single lost receipt would otherwise reach nobody. Skipped runs
 log `daily report skipped: nothing parsed` with the full counts, because once
 silence is normal, a missing email no longer proves anything about whether the
-report ran.
+report ran. The `report-errors` alarm covers the case that matters — a run that
+crashed — and goes to the alarm address rather than the report's own.
 
 It is its own Lambda and IAM role rather than a branch inside `api`, scoped to
 `cloudwatch:GetMetricData`, `sns:Publish`, and one `dynamodb:GetItem` pinned by
