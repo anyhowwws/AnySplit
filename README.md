@@ -228,7 +228,7 @@ Separately, bot tokens are scrubbed from every line: HTTP clients quote the URL
 they failed on, Telegram URLs embed the token, and a token in CloudWatch would
 outlive any rotation.
 
-Seven CloudWatch alarms and a daily usage digest cover what the logs alone would
+Eight CloudWatch alarms and a daily usage digest cover what the logs alone would
 not; [DESIGN.md § Observability](DESIGN.md#observability) explains what each one
 is there to catch.
 
